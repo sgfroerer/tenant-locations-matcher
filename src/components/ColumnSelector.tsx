@@ -37,7 +37,7 @@ const ColumnSelector: React.FC<ColumnSelectorProps> = ({
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="">None</SelectItem>
+          <SelectItem value="none">None</SelectItem>
           {headers.map((header) => (
             <SelectItem key={header} value={header}>
               {header}
