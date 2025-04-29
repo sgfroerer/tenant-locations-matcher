@@ -119,8 +119,9 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         // Update popup
         markerRef.current.bindPopup(address).openPopup();
       } else {
+        // Changed from "warning" to "default" since "warning" is not a valid variant
         toast({
-          variant: "warning",
+          variant: "default",
           title: "Location not found",
           description: `Could not find coordinates for "${address}"`
         });
