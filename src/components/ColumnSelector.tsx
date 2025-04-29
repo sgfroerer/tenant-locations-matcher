@@ -14,6 +14,7 @@ interface ColumnSelectorProps {
   onChange: (column: string) => void;
   label: string;
   disabled?: boolean;
+  placeholder?: string;
 }
 
 const ColumnSelector: React.FC<ColumnSelectorProps> = ({
@@ -21,7 +22,8 @@ const ColumnSelector: React.FC<ColumnSelectorProps> = ({
   selectedColumn,
   onChange,
   label,
-  disabled = false
+  disabled = false,
+  placeholder = "Select column"
 }) => {
   return (
     <div className="w-full">
@@ -32,9 +34,10 @@ const ColumnSelector: React.FC<ColumnSelectorProps> = ({
         disabled={disabled}
       >
         <SelectTrigger className="w-full">
-          <SelectValue placeholder="Select column" />
+          <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
+          <SelectItem value="">None</SelectItem>
           {headers.map((header) => (
             <SelectItem key={header} value={header}>
               {header}

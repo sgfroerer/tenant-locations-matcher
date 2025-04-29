@@ -23,6 +23,19 @@ export const parseFile = async (file: File): Promise<{ data: FileData; headers: 
           reject(new Error(`CSV parsing error: ${error.message}`));
         }
       });
+    } else if (fileExt === 'tsv' || fileExt === 'txt') {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        delimiter: '\t',
+        complete: (result) => {
+          const headers = result.meta.fields || [];
+          resolve({ data: result.data as FileData, headers });
+        },
+        error: (error) => {
+          reject(new Error(`TSV parsing error: ${error.message}`));
+        }
+      });
     } else if (['xlsx', 'xls'].includes(fileExt)) {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -47,9 +60,24 @@ export const parseFile = async (file: File): Promise<{ data: FileData; headers: 
       };
       reader.readAsBinaryString(file);
     } else {
-      reject(new Error('Unsupported file format. Please upload CSV or Excel file.'));
+      reject(new Error('Unsupported file format. Please upload CSV, TSV, or Excel file.'));
     }
   });
+};
+
+export const parseClipboardText = (text: string): { data: FileData; headers: string[] } => {
+  // Try to detect the delimiter (tab or comma)
+  const firstLine = text.trim().split('\n')[0];
+  const delimiter = firstLine.includes('\t') ? '\t' : ',';
+  
+  const result = Papa.parse(text, {
+    header: true,
+    skipEmptyLines: true,
+    delimiter,
+  });
+  
+  const headers = result.meta.fields || [];
+  return { data: result.data as FileData, headers };
 };
 
 export const exportToCSV = (data: any[], fileName: string): void => {

@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,6 +15,7 @@ import {
 type ResultRow = {
   address1: string;
   address2: string;
+  propertyId?: string;
   score: number;
   matchType: 'exact' | 'fuzzy' | 'missing';
 };
@@ -23,20 +23,30 @@ type ResultRow = {
 interface ResultsTableProps {
   results: ResultRow[];
   onExport: (fileType: 'csv' | 'xlsx') => void;
+  includePropertyId?: boolean;
 }
 
-const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
+const ResultsTable: React.FC<ResultsTableProps> = ({ 
+  results, 
+  onExport, 
+  includePropertyId = false 
+}) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [activeTab, setActiveTab] = useState('all');
   const itemsPerPage = 10;
+  
+  // Reset page when tab changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab]);
   
   // Filter results based on tab
   const filteredResults = results.filter(row => {
     if (activeTab === 'all') return true;
     if (activeTab === 'exact') return row.matchType === 'exact';
     if (activeTab === 'fuzzy') return row.matchType === 'fuzzy';
-    if (activeTab === 'missing') return row.matchType === 'missing';
-    if (activeTab === 'extraInCoStar') return row.address1 === '';
+    if (activeTab === 'missing') return row.matchType === 'missing' && row.address1;
+    if (activeTab === 'extraInCoStar') return !row.address1 && row.address2;
     return true;
   });
 
@@ -49,8 +59,8 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
   // Count for summary
   const exactCount = results.filter(r => r.matchType === 'exact').length;
   const fuzzyCount = results.filter(r => r.matchType === 'fuzzy').length;
-  const missingCount = results.filter(r => r.matchType === 'missing' && r.address1 !== '').length;
-  const extraCount = results.filter(r => r.address1 === '').length;
+  const missingCount = results.filter(r => r.matchType === 'missing' && r.address1).length;
+  const extraCount = results.filter(r => !r.address1 && r.address2).length;
 
   return (
     <div className="w-full">
@@ -100,6 +110,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                 <TableRow>
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
+                  {includePropertyId && (
+                    <TableHead>Property ID</TableHead>
+                  )}
                   <TableHead className="w-24">Match Score</TableHead>
                   <TableHead className="w-28">Status</TableHead>
                 </TableRow>
@@ -107,15 +120,18 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8">
+                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
                       No results found
                     </TableCell>
                   </TableRow>
                 ) : (
                   pageResults.map((row, index) => (
                     <TableRow key={index}>
-                      <TableCell className="font-medium">{row.address1}</TableCell>
-                      <TableCell>{row.address2}</TableCell>
+                      <TableCell className="font-medium">{row.address1 || '-'}</TableCell>
+                      <TableCell>{row.address2 || '-'}</TableCell>
+                      {includePropertyId && (
+                        <TableCell>{row.propertyId || '-'}</TableCell>
+                      )}
                       <TableCell>
                         {row.score > 0 ? row.score.toFixed(2) : '-'}
                       </TableCell>
@@ -135,7 +151,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                             Missing in CoStar
                           </span>
                         )}
-                        {row.matchType === 'missing' && !row.address1 && (
+                        {!row.address1 && row.address2 && (
                           <span className="px-2 py-1 rounded-md bg-gray-200 text-gray-700 font-medium text-xs">
                             Extra in CoStar
                           </span>
@@ -213,15 +229,15 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
         </TabsContent>
         
         <TabsContent value="exact" className="mt-0">
-          {/* Same table structure as "all" tab */}
-          {/* This content is the same structure but with filtered results */}
           <div className="rounded-md border">
             <Table>
-              {/* Same table structure */}
               <TableHeader>
                 <TableRow>
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
+                  {includePropertyId && (
+                    <TableHead>Property ID</TableHead>
+                  )}
                   <TableHead className="w-24">Match Score</TableHead>
                   <TableHead className="w-28">Status</TableHead>
                 </TableRow>
@@ -229,7 +245,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8">
+                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
                       No exact matches found
                     </TableCell>
                   </TableRow>
@@ -238,6 +254,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                     <TableRow key={index}>
                       <TableCell className="font-medium">{row.address1}</TableCell>
                       <TableCell>{row.address2}</TableCell>
+                      {includePropertyId && (
+                        <TableCell>{row.propertyId || '-'}</TableCell>
+                      )}
                       <TableCell>
                         {row.score > 0 ? row.score.toFixed(2) : '-'}
                       </TableCell>
@@ -252,12 +271,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
               </TableBody>
             </Table>
           </div>
-          {/* Same pagination code */}
           {totalPages > 1 && (
             <Pagination className="mt-4">
-              {/* Same pagination content */}
               <PaginationContent>
-                {/* Similar pagination structure */}
                 <PaginationItem>
                   <PaginationPrevious 
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
@@ -265,7 +281,6 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                   />
                 </PaginationItem>
                 
-                {/* Same pagination items */}
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   let pageNum = i + 1;
                   
@@ -320,15 +335,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
           )}
         </TabsContent>
         
-        {/* Similar structure for other tabs */}
         <TabsContent value="fuzzy" className="mt-0">
-          {/* Same table and pagination structure */}
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
+                  {includePropertyId && (
+                    <TableHead>Property ID</TableHead>
+                  )}
                   <TableHead className="w-24">Match Score</TableHead>
                   <TableHead className="w-28">Status</TableHead>
                 </TableRow>
@@ -336,7 +352,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8">
+                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
                       No fuzzy matches found
                     </TableCell>
                   </TableRow>
@@ -345,6 +361,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                     <TableRow key={index}>
                       <TableCell className="font-medium">{row.address1}</TableCell>
                       <TableCell>{row.address2}</TableCell>
+                      {includePropertyId && (
+                        <TableCell>{row.propertyId || '-'}</TableCell>
+                      )}
                       <TableCell>
                         {row.score > 0 ? row.score.toFixed(2) : '-'}
                       </TableCell>
@@ -362,7 +381,6 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
           {totalPages > 1 && (
             <Pagination className="mt-4">
               <PaginationContent>
-                {/* Same pagination structure */}
                 <PaginationItem>
                   <PaginationPrevious 
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
@@ -370,8 +388,48 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                   />
                 </PaginationItem>
                 
-                {/* Same pagination items */}
-                {/* ... */}
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum = i + 1;
+                  
+                  if (totalPages > 5) {
+                    if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                  }
+                  
+                  return (
+                    <PaginationItem key={i}>
+                      <PaginationLink
+                        isActive={currentPage === pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className="cursor-pointer"
+                      >
+                        {pageNum}
+                      </PaginationLink>
+                    </PaginationItem>
+                  );
+                })}
+                
+                {totalPages > 5 && currentPage < totalPages - 2 && (
+                  <PaginationItem>
+                    <PaginationEllipsis />
+                  </PaginationItem>
+                )}
+                
+                {totalPages > 5 && currentPage < totalPages - 2 && (
+                  <PaginationItem>
+                    <PaginationLink 
+                      onClick={() => setCurrentPage(totalPages)}
+                      className="cursor-pointer"
+                    >
+                      {totalPages}
+                    </PaginationLink>
+                  </PaginationItem>
+                )}
                 
                 <PaginationItem>
                   <PaginationNext 
@@ -385,13 +443,15 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
         </TabsContent>
         
         <TabsContent value="missing" className="mt-0">
-          {/* Same structure */}
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
+                  {includePropertyId && (
+                    <TableHead>Property ID</TableHead>
+                  )}
                   <TableHead className="w-24">Match Score</TableHead>
                   <TableHead className="w-28">Status</TableHead>
                 </TableRow>
@@ -399,7 +459,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8">
+                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
                       No missing locations found
                     </TableCell>
                   </TableRow>
@@ -408,6 +468,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                     <TableRow key={index}>
                       <TableCell className="font-medium">{row.address1}</TableCell>
                       <TableCell>-</TableCell>
+                      {includePropertyId && (
+                        <TableCell>-</TableCell>
+                      )}
                       <TableCell>-</TableCell>
                       <TableCell>
                         <span className="px-2 py-1 rounded-md bg-match-missing/20 text-match-missing font-medium text-xs">
@@ -423,20 +486,77 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
           {totalPages > 1 && (
             <Pagination className="mt-4">
               <PaginationContent>
-                {/* Same pagination structure */}
+                <PaginationItem>
+                  <PaginationPrevious 
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    className={`${currentPage === 1 ? 'pointer-events-none opacity-50' : ''} cursor-pointer`}
+                  />
+                </PaginationItem>
+                
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum = i + 1;
+                  
+                  if (totalPages > 5) {
+                    if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                  }
+                  
+                  return (
+                    <PaginationItem key={i}>
+                      <PaginationLink
+                        isActive={currentPage === pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className="cursor-pointer"
+                      >
+                        {pageNum}
+                      </PaginationLink>
+                    </PaginationItem>
+                  );
+                })}
+                
+                {totalPages > 5 && currentPage < totalPages - 2 && (
+                  <PaginationItem>
+                    <PaginationEllipsis />
+                  </PaginationItem>
+                )}
+                
+                {totalPages > 5 && currentPage < totalPages - 2 && (
+                  <PaginationItem>
+                    <PaginationLink 
+                      onClick={() => setCurrentPage(totalPages)}
+                      className="cursor-pointer"
+                    >
+                      {totalPages}
+                    </PaginationLink>
+                  </PaginationItem>
+                )}
+                
+                <PaginationItem>
+                  <PaginationNext 
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    className={`${currentPage === totalPages ? 'pointer-events-none opacity-50' : ''} cursor-pointer`}
+                  />
+                </PaginationItem>
               </PaginationContent>
             </Pagination>
           )}
         </TabsContent>
         
         <TabsContent value="extraInCoStar" className="mt-0">
-          {/* Same structure */}
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
+                  {includePropertyId && (
+                    <TableHead>Property ID</TableHead>
+                  )}
                   <TableHead className="w-24">Match Score</TableHead>
                   <TableHead className="w-28">Status</TableHead>
                 </TableRow>
@@ -444,7 +564,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8">
+                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
                       No extra locations in CoStar found
                     </TableCell>
                   </TableRow>
@@ -453,6 +573,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
                     <TableRow key={index}>
                       <TableCell className="font-medium">-</TableCell>
                       <TableCell>{row.address2}</TableCell>
+                      {includePropertyId && (
+                        <TableCell>{row.propertyId || '-'}</TableCell>
+                      )}
                       <TableCell>-</TableCell>
                       <TableCell>
                         <span className="px-2 py-1 rounded-md bg-gray-200 text-gray-700 font-medium text-xs">
@@ -468,7 +591,62 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, onExport }) => {
           {totalPages > 1 && (
             <Pagination className="mt-4">
               <PaginationContent>
-                {/* Same pagination structure */}
+                <PaginationItem>
+                  <PaginationPrevious 
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    className={`${currentPage === 1 ? 'pointer-events-none opacity-50' : ''} cursor-pointer`}
+                  />
+                </PaginationItem>
+                
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum = i + 1;
+                  
+                  if (totalPages > 5) {
+                    if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                  }
+                  
+                  return (
+                    <PaginationItem key={i}>
+                      <PaginationLink
+                        isActive={currentPage === pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className="cursor-pointer"
+                      >
+                        {pageNum}
+                      </PaginationLink>
+                    </PaginationItem>
+                  );
+                })}
+                
+                {totalPages > 5 && currentPage < totalPages - 2 && (
+                  <PaginationItem>
+                    <PaginationEllipsis />
+                  </PaginationItem>
+                )}
+                
+                {totalPages > 5 && currentPage < totalPages - 2 && (
+                  <PaginationItem>
+                    <PaginationLink 
+                      onClick={() => setCurrentPage(totalPages)}
+                      className="cursor-pointer"
+                    >
+                      {totalPages}
+                    </PaginationLink>
+                  </PaginationItem>
+                )}
+                
+                <PaginationItem>
+                  <PaginationNext 
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    className={`${currentPage === totalPages ? 'pointer-events-none opacity-50' : ''} cursor-pointer`}
+                  />
+                </PaginationItem>
               </PaginationContent>
             </Pagination>
           )}
