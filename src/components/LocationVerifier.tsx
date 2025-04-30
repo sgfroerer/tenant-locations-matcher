@@ -130,7 +130,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     setLocations(costarOnlyAddresses.map(address => ({
       address,
       propertyId: costarPropertyIds[address] || undefined,
-      verified: false
+      verified: undefined
     })));
   }, [costarOnlyAddresses, costarPropertyIds]);
   
@@ -284,7 +284,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       // Store the marker with the address as the key
       markersRef.current.set(location.address, marker);
       
-      // Only bind popup, don't open it by default
+      // Bind popup but don't open it by default
       marker.bindPopup(
         `<b>${location.address}</b>` + 
         (location.propertyId ? `<br>ID: ${location.propertyId}` : '') + 
@@ -292,6 +292,9 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           `<br>Status: ${location.verified ? 'Keep' : 'Remove'}` : 
           '')
       );
+      
+      // Don't auto-open popups
+      marker.closePopup();
     });
   };
   
@@ -322,13 +325,16 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         );
         
         currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
-          .addTo(mapInstanceRef.current)
-          .bindPopup(
-            `<b>${location.address}</b>` + 
-            (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
-          );
+          .addTo(mapInstanceRef.current);
+          
+        // Bind popup but don't open it by default
+        currentMarkerRef.current.bindPopup(
+          `<b>${location.address}</b>` + 
+          (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
+        );
         
-        // Don't open popup by default
+        // Don't auto-open popup
+        currentMarkerRef.current.closePopup();
         
         return;
       }
@@ -375,13 +381,16 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         );
         
         currentMarkerRef.current = leaflet.marker(coordinates, { icon })
-          .addTo(mapInstanceRef.current)
-          .bindPopup(
-            `<b>${location.address}</b>` + 
-            (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
-          );
+          .addTo(mapInstanceRef.current);
+          
+        // Bind popup but don't open it by default
+        currentMarkerRef.current.bindPopup(
+          `<b>${location.address}</b>` + 
+          (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
+        );
         
-        // Don't open popup by default
+        // Don't auto-open popup
+        currentMarkerRef.current.closePopup();
           
       } else {
         toast({
@@ -410,38 +419,41 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   };
   
   const handleKeepLocation = () => {
+    if (currentIndex >= locations.length) return;
+    
     // Create a new array to ensure React detects the change
-    const updatedLocations = locations.map((loc, idx) => {
-      if (idx === currentIndex) {
-        return { ...loc, verified: true };
-      }
-      return loc;
-    });
+    const updatedLocations = [...locations];
+    updatedLocations[currentIndex] = {
+      ...updatedLocations[currentIndex],
+      verified: true
+    };
     
     setLocations(updatedLocations);
     
-    // Add a small delay before moving to next location to allow UI to update
-    setTimeout(() => moveToNextLocation(), 300);
+    // Move to the next location immediately
+    moveToNextLocation();
   };
   
   const handleRemoveLocation = () => {
+    if (currentIndex >= locations.length) return;
+    
     // Create a new array to ensure React detects the change
-    const updatedLocations = locations.map((loc, idx) => {
-      if (idx === currentIndex) {
-        return { ...loc, verified: false };
-      }
-      return loc;
-    });
+    const updatedLocations = [...locations];
+    updatedLocations[currentIndex] = {
+      ...updatedLocations[currentIndex],
+      verified: false
+    };
     
     setLocations(updatedLocations);
     
-    // Add a small delay before moving to next location to allow UI to update
-    setTimeout(() => moveToNextLocation(), 300);
+    // Move to the next location immediately
+    moveToNextLocation();
   };
   
   const moveToNextLocation = () => {
     if (currentIndex < locations.length - 1) {
-      setCurrentIndex(currentIndex + 1);
+      // Use functional update to ensure we're using the latest state
+      setCurrentIndex(prevIndex => prevIndex + 1);
     } else {
       // All locations verified
       finishVerification();
@@ -457,7 +469,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     const verifiedResults = locations.map(loc => ({
       address: loc.address,
       propertyId: loc.propertyId,
-      keep: !!loc.verified
+      keep: loc.verified === true // Only true values are kept, undefined or false are not kept
     }));
     
     onVerificationComplete(verifiedResults);
