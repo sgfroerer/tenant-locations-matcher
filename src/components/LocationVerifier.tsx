@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 type Location = {
   address: string;
   propertyId?: string;
+  tenant?: string;
   verified?: boolean;
   coordinates?: [number, number]; // [lat, lng]
 };
@@ -17,7 +18,8 @@ type Location = {
 interface LocationVerifierProps {
   costarOnlyAddresses: string[];
   costarPropertyIds: Record<string, string>;
-  onVerificationComplete: (verifiedAddresses: { address: string; propertyId?: string; keep: boolean }[]) => void;
+  costarTenantNames?: Record<string, string>;
+  onVerificationComplete: (verifiedAddresses: { address: string; propertyId?: string; tenant?: string; keep: boolean }[]) => void;
 }
 
 // CSS for custom marker with pulse effect
@@ -70,9 +72,47 @@ const mapStyles = `
   }
 `;
 
+// Function to geocode using Census Geocoder API
+const geocodeWithCensus = async (address: string): Promise<[number, number] | null> => {
+  try {
+    // Format the address for the Census API
+    const formattedAddress = encodeURIComponent(address);
+    
+    // Make request to Census Geocoder API (using onelineaddress format)
+    const response = await fetch(
+      `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${formattedAddress}&benchmark=Public_AR_Current&format=json`
+    );
+    
+    const data = await response.json();
+    
+    // Check if we have valid matches
+    if (data && 
+        data.result && 
+        data.result.addressMatches && 
+        data.result.addressMatches.length > 0) {
+      
+      const match = data.result.addressMatches[0];
+      const coordinates = match.coordinates;
+      
+      // Census API returns coordinates as [longitude, latitude]
+      // But we need [latitude, longitude] for Leaflet
+      return [coordinates.y, coordinates.x];
+    }
+    
+    return null;
+  } catch (error) {
+    console.error("Error using Census geocoder:", error);
+    return null;
+  }
+};
+
+// Helper function to add delay between geocoding requests to avoid rate limiting
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const LocationVerifier: React.FC<LocationVerifierProps> = ({
   costarOnlyAddresses,
   costarPropertyIds,
+  costarTenantNames = {},
   onVerificationComplete,
 }) => {
   const [locations, setLocations] = useState<Location[]>([]);
@@ -130,9 +170,10 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     setLocations(costarOnlyAddresses.map(address => ({
       address,
       propertyId: costarPropertyIds[address] || undefined,
+      tenant: costarTenantNames[address] || undefined,
       verified: undefined
     })));
-  }, [costarOnlyAddresses, costarPropertyIds]);
+  }, [costarOnlyAddresses, costarPropertyIds, costarTenantNames]);
   
   // Create custom marker icon with pulse effect
   const createCustomMarkerIcon = (L: any, isVerified: boolean = false, isRejected: boolean = false, isCurrent: boolean = false) => {
@@ -187,7 +228,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     }
   }, [currentIndex, locations, mapLoaded, leaflet]);
   
-  // Geocode and add markers for all locations when locations array changes
+  // Geocode and add markers for locations in batches to avoid rate limiting
   useEffect(() => {
     if (!mapLoaded || !leaflet || !mapInstanceRef.current || locations.length === 0) return;
     
@@ -202,49 +243,101 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       currentMarkerRef.current = null;
     }
     
-    // Geocode locations that don't have coordinates
-    const geocodeLocations = async () => {
-      const geocodingPromises = locations.map(async (location, index) => {
+    // Process locations in smaller batches to avoid overwhelming the geocoding service
+    const batchSize = 5;
+    const processBatch = async (startIndex: number) => {
+      const batch = locations.slice(startIndex, startIndex + batchSize);
+      
+      // Skip this batch if it's empty
+      if (batch.length === 0) return;
+      
+      const geocodingPromises = batch.map(async (location, index) => {
         // Skip if already has coordinates
         if (location.coordinates) return location;
         
         try {
-          // Add delay to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, index * 200));
+          // Add delay between requests to avoid rate limiting
+          await delay(index * 300);
           
-          const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
-          );
-          const data = await response.json();
-          
-          if (data && data.length > 0) {
-            const { lat, lon } = data[0];
+          // Try Census Geocoder first
+          const censusCoordinates = await geocodeWithCensus(location.address);
+          if (censusCoordinates) {
             return {
               ...location,
-              coordinates: [parseFloat(lat), parseFloat(lon)] as [number, number]
+              coordinates: censusCoordinates as [number, number]
             };
           }
-          return location;
+          
+          // If Census geocoder fails, try OpenStreetMap as fallback with longer delay
+          await delay(500);
+          
+          try {
+            const response = await fetch(
+              `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
+            );
+            const data = await response.json();
+            
+            if (data && data.length > 0) {
+              const { lat, lon } = data[0];
+              return {
+                ...location,
+                coordinates: [parseFloat(lat), parseFloat(lon)] as [number, number]
+              };
+            }
+            
+            return location;
+          } catch (error) {
+            console.error(`Error with OpenStreetMap geocoding for address ${location.address}:`, error);
+            return location;
+          }
         } catch (error) {
           console.error(`Error geocoding address ${location.address}:`, error);
           return location;
         }
       });
       
-      // Wait for all geocoding to complete
-      const updatedLocations = await Promise.all(geocodingPromises);
-      setLocations(updatedLocations);
-      
-      // Add markers for all locations
-      updateAllMarkers(updatedLocations);
-      
-      // Focus on current location if it has coordinates
-      if (updatedLocations[currentIndex]?.coordinates) {
-        updateMapForAddress(updatedLocations[currentIndex], true);
+      try {
+        // Process batch
+        const updatedLocationsBatch = await Promise.all(geocodingPromises);
+        
+        // Update locations state with the geocoded batch
+        setLocations(prevLocations => {
+          const newLocations = [...prevLocations];
+          updatedLocationsBatch.forEach((loc, idx) => {
+            const originalIndex = startIndex + idx;
+            if (originalIndex < newLocations.length) {
+              newLocations[originalIndex] = loc;
+            }
+          });
+          return newLocations;
+        });
+        
+        // Add markers for this batch
+        updateAllMarkers();
+        
+        // Process next batch if there are more locations
+        if (startIndex + batchSize < locations.length) {
+          setTimeout(() => processBatch(startIndex + batchSize), 2000);
+        }
+        
+        // If we just processed the batch with the current location, update the map view
+        if (currentIndex >= startIndex && currentIndex < startIndex + batchSize) {
+          const currentLoc = updatedLocationsBatch[currentIndex - startIndex];
+          if (currentLoc && currentLoc.coordinates) {
+            updateMapForAddress(currentLoc, true);
+          }
+        }
+      } catch (error) {
+        console.error("Error processing geocoding batch:", error);
+        // Continue with next batch despite errors
+        if (startIndex + batchSize < locations.length) {
+          setTimeout(() => processBatch(startIndex + batchSize), 2000);
+        }
       }
     };
     
-    geocodeLocations();
+    // Start processing the first batch
+    processBatch(0);
   }, [locations.length, mapLoaded, leaflet]);
   
   // Update markers when verification status changes
@@ -252,23 +345,23 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     if (!mapLoaded || !leaflet || !mapInstanceRef.current) return;
     
     // Update all markers to reflect current verification status
-    updateAllMarkers(locations);
+    updateAllMarkers();
     
   }, [locations.map(l => l.verified).join(','), mapLoaded, leaflet]);
   
-  const updateAllMarkers = (locationsList: Location[]) => {
+  const updateAllMarkers = () => {
     if (!leaflet || !mapInstanceRef.current) return;
     
     // Remove all current markers except the current one
     markersRef.current.forEach((marker, address) => {
-      if (address !== locationsList[currentIndex]?.address) {
+      if (locations[currentIndex] && address !== locations[currentIndex].address) {
         mapInstanceRef.current.removeLayer(marker);
       }
     });
     markersRef.current.clear();
     
     // Add markers for all locations with coordinates
-    locationsList.forEach((location, index) => {
+    locations.forEach((location, index) => {
       if (!location.coordinates || index === currentIndex) return;
       
       const icon = createCustomMarkerIcon(
@@ -284,16 +377,23 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       // Store the marker with the address as the key
       markersRef.current.set(location.address, marker);
       
-      // Bind popup but don't open it by default
-      marker.bindPopup(
-        `<b>${location.address}</b>` + 
-        (location.propertyId ? `<br>ID: ${location.propertyId}` : '') + 
-        (location.verified !== undefined ? 
-          `<br>Status: ${location.verified ? 'Keep' : 'Remove'}` : 
-          '')
-      );
+      // Build popup content with available information
+      let popupContent = `<b>${location.address}</b>`;
       
-      // Don't auto-open popups
+      if (location.propertyId) {
+        popupContent += `<br>ID: ${location.propertyId}`;
+      }
+      
+      if (location.tenant) {
+        popupContent += `<br>Tenant: ${location.tenant}`;
+      }
+      
+      if (location.verified !== undefined) {
+        popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
+      }
+      
+      // Bind popup but don't open it by default
+      marker.bindPopup(popupContent);
       marker.closePopup();
     });
   };
@@ -326,29 +426,29 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         
         currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
           .addTo(mapInstanceRef.current);
+        
+        // Build popup content with available information
+        let popupContent = `<b>${location.address}</b>`;
+        
+        if (location.propertyId) {
+          popupContent += `<br>ID: ${location.propertyId}`;
+        }
+        
+        if (location.tenant) {
+          popupContent += `<br>Tenant: ${location.tenant}`;
+        }
           
         // Bind popup but don't open it by default
-        currentMarkerRef.current.bindPopup(
-          `<b>${location.address}</b>` + 
-          (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
-        );
-        
-        // Don't auto-open popup
+        currentMarkerRef.current.bindPopup(popupContent);
         currentMarkerRef.current.closePopup();
         
         return;
       }
       
-      // Geocode the address using Nominatim (OpenStreetMap)
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
-      );
-      const data = await response.json();
+      // Try Census Geocoder first
+      const censusCoordinates = await geocodeWithCensus(location.address);
       
-      if (data && data.length > 0) {
-        const { lat, lon } = data[0];
-        const coordinates: [number, number] = [parseFloat(lat), parseFloat(lon)];
-        
+      if (censusCoordinates) {
         // Update location with coordinates
         const updatedLocations = [...locations];
         const locationIndex = locations.findIndex(loc => loc.address === location.address);
@@ -356,13 +456,13 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         if (locationIndex !== -1) {
           updatedLocations[locationIndex] = {
             ...updatedLocations[locationIndex],
-            coordinates
+            coordinates: censusCoordinates as [number, number]
           };
           setLocations(updatedLocations);
         }
         
         // Update map view
-        mapInstanceRef.current.flyTo(coordinates, 16, {
+        mapInstanceRef.current.flyTo(censusCoordinates, 16, {
           duration: 1.5,
           animate: true
         });
@@ -380,21 +480,93 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           isCurrent
         );
         
-        currentMarkerRef.current = leaflet.marker(coordinates, { icon })
+        currentMarkerRef.current = leaflet.marker(censusCoordinates, { icon })
           .addTo(mapInstanceRef.current);
+        
+        // Build popup content with available information
+        let popupContent = `<b>${location.address}</b>`;
+        
+        if (location.propertyId) {
+          popupContent += `<br>ID: ${location.propertyId}`;
+        }
+        
+        if (location.tenant) {
+          popupContent += `<br>Tenant: ${location.tenant}`;
+        }
           
         // Bind popup but don't open it by default
-        currentMarkerRef.current.bindPopup(
-          `<b>${location.address}</b>` + 
-          (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
-        );
-        
-        // Don't auto-open popup
+        currentMarkerRef.current.bindPopup(popupContent);
         currentMarkerRef.current.closePopup();
+        
+        return;
+      }
+      
+      // Fall back to OpenStreetMap if Census geocoder fails
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
+        );
+        const data = await response.json();
+        
+        if (data && data.length > 0) {
+          const { lat, lon } = data[0];
+          const coordinates: [number, number] = [parseFloat(lat), parseFloat(lon)];
           
-      } else {
+          // Update location with coordinates
+          const updatedLocations = [...locations];
+          const locationIndex = locations.findIndex(loc => loc.address === location.address);
+          
+          if (locationIndex !== -1) {
+            updatedLocations[locationIndex] = {
+              ...updatedLocations[locationIndex],
+              coordinates
+            };
+            setLocations(updatedLocations);
+          }
+          
+          // Update map view
+          mapInstanceRef.current.flyTo(coordinates, 16, {
+            duration: 1.5,
+            animate: true
+          });
+          
+          // Update or create marker
+          if (currentMarkerRef.current) {
+            mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+          }
+          
+          // Create marker with custom icon
+          const icon = createCustomMarkerIcon(
+            leaflet, 
+            location.verified === true,
+            location.verified === false,
+            isCurrent
+          );
+          
+          currentMarkerRef.current = leaflet.marker(coordinates, { icon })
+            .addTo(mapInstanceRef.current);
+          
+          // Build popup content with available information
+          let popupContent = `<b>${location.address}</b>`;
+          
+          if (location.propertyId) {
+            popupContent += `<br>ID: ${location.propertyId}`;
+          }
+          
+          if (location.tenant) {
+            popupContent += `<br>Tenant: ${location.tenant}`;
+          }
+            
+          // Bind popup but don't open it by default
+          currentMarkerRef.current.bindPopup(popupContent);
+          currentMarkerRef.current.closePopup();
+        } else {
+          throw new Error("Location not found");
+        }
+      } catch (error) {
+        // If both geocoding services fail, show a message
         toast({
-          variant: "default", // Using default instead of warning
+          variant: "default",
           title: "Location not found",
           description: `Could not find coordinates for "${location.address}"`
         });
@@ -469,6 +641,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     const verifiedResults = locations.map(loc => ({
       address: loc.address,
       propertyId: loc.propertyId,
+      tenant: loc.tenant,
       keep: loc.verified === true // Only true values are kept, undefined or false are not kept
     }));
     
@@ -523,6 +696,11 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
                   Property ID: {locations[currentIndex].propertyId}
                 </p>
               )}
+              {locations[currentIndex]?.tenant && (
+                <p className="text-sm text-muted-foreground">
+                  Tenant: {locations[currentIndex].tenant}
+                </p>
+              )}
             </div>
             
             <div className="flex gap-2">
@@ -565,6 +743,9 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
                       <p className="font-medium text-sm">{location.address}</p>
                       {location.propertyId && (
                         <p className="text-xs text-muted-foreground">ID: {location.propertyId}</p>
+                      )}
+                      {location.tenant && (
+                        <p className="text-xs text-muted-foreground">Tenant: {location.tenant}</p>
                       )}
                     </div>
                     {location.verified !== undefined && (

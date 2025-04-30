@@ -15,6 +15,7 @@ type ResultRow = {
   address1: string;
   address2: string;
   propertyId?: string;
+  tenant?: string;
   score: number;
   matchType: 'exact' | 'fuzzy' | 'missing';
 };
@@ -25,8 +26,10 @@ const Index = () => {
   const [source1Headers, setSource1Headers] = useState<string[]>([]);
   const [source2Headers, setSource2Headers] = useState<string[]>([]);
   const [source1AddressColumn, setSource1AddressColumn] = useState<string>('');
+  const [source1TenantColumn, setSource1TenantColumn] = useState<string>('');
   const [source2AddressColumn, setSource2AddressColumn] = useState<string>('');
   const [source2PropertyIdColumn, setSource2PropertyIdColumn] = useState<string>('');
+  const [source2TenantColumn, setSource2TenantColumn] = useState<string>('');
   const [results, setResults] = useState<ResultRow[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showResults, setShowResults] = useState(false);
@@ -49,6 +52,18 @@ const Index = () => {
         setSource1AddressColumn(addressColumn);
       } else if (headers.length > 0) {
         setSource1AddressColumn(headers[0]);
+      }
+      
+      // Try to automatically select a column that looks like a tenant name
+      const tenantColumn = headers.find(header => 
+        header.toLowerCase().includes('tenant') || 
+        header.toLowerCase().includes('company') ||
+        header.toLowerCase().includes('business') ||
+        header.toLowerCase().includes('name') ||
+        header.toLowerCase().includes('client')
+      );
+      if (tenantColumn) {
+        setSource1TenantColumn(tenantColumn);
       }
     } else {
       setSource2Data(data);
@@ -75,6 +90,18 @@ const Index = () => {
       if (propertyIdColumn) {
         setSource2PropertyIdColumn(propertyIdColumn);
       }
+      
+      // Try to automatically select a column that looks like a tenant name
+      const tenantColumn = headers.find(header => 
+        header.toLowerCase().includes('tenant') || 
+        header.toLowerCase().includes('company') ||
+        header.toLowerCase().includes('business') ||
+        header.toLowerCase().includes('name') ||
+        header.toLowerCase().includes('client')
+      );
+      if (tenantColumn) {
+        setSource2TenantColumn(tenantColumn);
+      }
     }
   };
 
@@ -100,31 +127,56 @@ const Index = () => {
         .map(row => row[source2AddressColumn])
         .filter(Boolean);
       
-      // Create mapping of addresses to property IDs if column is selected
+      // Create mapping of addresses to property IDs and tenant names if column is selected
       const propertyIdMapping: Record<string, string> = {};
-      if (source2PropertyIdColumn) {
-        source2Data.forEach(row => {
-          const address = row[source2AddressColumn];
-          const propertyId = row[source2PropertyIdColumn];
-          if (address && propertyId) {
-            propertyIdMapping[address] = propertyId;
+      const tenantMapping: Record<string, string> = {};
+      
+      // Source 1 tenant mapping
+      if (source1TenantColumn) {
+        source1Data.forEach(row => {
+          const address = row[source1AddressColumn];
+          const tenant = row[source1TenantColumn];
+          if (address && tenant) {
+            tenantMapping[address] = tenant;
           }
         });
       }
       
+      // Source 2 property ID and tenant mapping
+      source2Data.forEach(row => {
+        const address = row[source2AddressColumn];
+        if (address) {
+          if (source2PropertyIdColumn) {
+            const propertyId = row[source2PropertyIdColumn];
+            if (propertyId) {
+              propertyIdMapping[address] = propertyId;
+            }
+          }
+          
+          if (source2TenantColumn) {
+            const tenant = row[source2TenantColumn];
+            if (tenant) {
+              tenantMapping[address] = tenant;
+            }
+          }
+        }
+      });
+      
       // Perform matching
       const matchResults = matchAddresses(addresses1, addresses2);
       
-      // Add property IDs to results
-      const resultsWithPropertyIds = matchResults.map(result => ({
+      // Add property IDs and tenant names to results
+      const resultsWithMetadata = matchResults.map(result => ({
         ...result,
-        propertyId: result.address2 ? propertyIdMapping[result.address2] : undefined
+        propertyId: result.address2 ? propertyIdMapping[result.address2] : undefined,
+        tenant: result.address1 ? tenantMapping[result.address1] : 
+                result.address2 ? tenantMapping[result.address2] : undefined
       }));
       
-      setResults(resultsWithPropertyIds);
+      setResults(resultsWithMetadata);
       
       // Check if there are any CoStar-only locations that need verification
-      const costarOnly = resultsWithPropertyIds.filter(r => !r.address1 && r.address2);
+      const costarOnly = resultsWithMetadata.filter(r => !r.address1 && r.address2);
       
       if (costarOnly.length > 0) {
         setVerificationStep(true);
@@ -134,7 +186,7 @@ const Index = () => {
       
       toast({
         title: "Comparison complete",
-        description: `Found ${resultsWithPropertyIds.filter(r => r.matchType === 'exact').length} exact matches, ${resultsWithPropertyIds.filter(r => r.matchType === 'fuzzy').length} fuzzy matches`,
+        description: `Found ${resultsWithMetadata.filter(r => r.matchType === 'exact').length} exact matches, ${resultsWithMetadata.filter(r => r.matchType === 'fuzzy').length} fuzzy matches`,
       });
     } catch (error) {
       toast({
@@ -147,7 +199,7 @@ const Index = () => {
     }
   };
 
-  const handleVerificationComplete = (verifiedAddresses: { address: string; propertyId?: string; keep: boolean }[]) => {
+  const handleVerificationComplete = (verifiedAddresses: { address: string; propertyId?: string; tenant?: string; keep: boolean }[]) => {
     // Filter results based on verification
     const updatedResults = results.map(result => {
       // If it's a CoStar-only address that was verified
@@ -170,7 +222,8 @@ const Index = () => {
     const dataToExport = verifiedResults.length > 0 ? verifiedResults : results;
     const filename = `tenant-locations-comparison-${new Date().toISOString().split('T')[0]}`;
     
-    const exportData = dataToExport.map(({ address1, address2, propertyId, score, matchType }) => ({
+    const exportData = dataToExport.map(({ address1, address2, propertyId, tenant, score, matchType }) => ({
+      'Tenant Name': tenant || '',
       'Website Address': address1 || '',
       'CoStar Address': address2 || '',
       'Property ID': propertyId || '',
@@ -193,11 +246,18 @@ const Index = () => {
     .map(r => r.address2);
   
   const costarPropertyIds: Record<string, string> = {};
+  const costarTenantNames: Record<string, string> = {};
+  
   results
-    .filter(r => !r.address1 && r.address2 && r.propertyId)
+    .filter(r => !r.address1 && r.address2)
     .forEach(r => {
-      if (r.address2 && r.propertyId) {
-        costarPropertyIds[r.address2] = r.propertyId;
+      if (r.address2) {
+        if (r.propertyId) {
+          costarPropertyIds[r.address2] = r.propertyId;
+        }
+        if (r.tenant) {
+          costarTenantNames[r.address2] = r.tenant;
+        }
       }
     });
 
@@ -225,13 +285,21 @@ const Index = () => {
                   label="Upload website location file (or paste data)"
                 />
                 {source1Headers.length > 0 && (
-                  <div className="mt-4">
+                  <div className="mt-4 space-y-4">
                     <ColumnSelector
                       headers={source1Headers}
                       selectedColumn={source1AddressColumn}
                       onChange={setSource1AddressColumn}
                       label="Select address column"
                       placeholder="Select address column"
+                    />
+                    
+                    <ColumnSelector
+                      headers={source1Headers}
+                      selectedColumn={source1TenantColumn}
+                      onChange={setSource1TenantColumn}
+                      label="Select tenant name column (optional)"
+                      placeholder="Select tenant name column"
                     />
                   </div>
                 )}
@@ -260,6 +328,14 @@ const Index = () => {
                       onChange={setSource2PropertyIdColumn}
                       label="Select property ID column (optional)"
                       placeholder="Select property ID column"
+                    />
+                    
+                    <ColumnSelector
+                      headers={source2Headers}
+                      selectedColumn={source2TenantColumn}
+                      onChange={setSource2TenantColumn}
+                      label="Select tenant name column (optional)"
+                      placeholder="Select tenant name column"
                     />
                   </div>
                 )}
@@ -303,6 +379,7 @@ const Index = () => {
             <LocationVerifier
               costarOnlyAddresses={costarOnlyAddresses}
               costarPropertyIds={costarPropertyIds}
+              costarTenantNames={costarTenantNames}
               onVerificationComplete={handleVerificationComplete}
             />
           </div>
@@ -344,6 +421,7 @@ const Index = () => {
                 results={verifiedResults.length > 0 ? verifiedResults : results} 
                 onExport={handleExport}
                 includePropertyId={!!source2PropertyIdColumn}
+                includeTenant={!!(source1TenantColumn || source2TenantColumn)}
               />
             </Card>
           </div>

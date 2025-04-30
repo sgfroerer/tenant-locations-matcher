@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ type ResultRow = {
   address1: string;
   address2: string;
   propertyId?: string;
+  tenant?: string;
   score: number;
   matchType: 'exact' | 'fuzzy' | 'missing';
 };
@@ -24,12 +26,14 @@ interface ResultsTableProps {
   results: ResultRow[];
   onExport: (fileType: 'csv' | 'xlsx') => void;
   includePropertyId?: boolean;
+  includeTenant?: boolean;
 }
 
 const ResultsTable: React.FC<ResultsTableProps> = ({ 
   results, 
   onExport, 
-  includePropertyId = false 
+  includePropertyId = false,
+  includeTenant = false
 }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [activeTab, setActiveTab] = useState('all');
@@ -108,6 +112,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
             <Table>
               <TableHeader>
                 <TableRow>
+                  {includeTenant && (
+                    <TableHead>Tenant Name</TableHead>
+                  )}
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
                   {includePropertyId && (
@@ -120,13 +127,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
+                    <TableCell colSpan={(includePropertyId ? 1 : 0) + (includeTenant ? 1 : 0) + 4} className="text-center py-8">
                       No results found
                     </TableCell>
                   </TableRow>
                 ) : (
                   pageResults.map((row, index) => (
                     <TableRow key={index}>
+                      {includeTenant && (
+                        <TableCell>{row.tenant || '-'}</TableCell>
+                      )}
                       <TableCell className="font-medium">{row.address1 || '-'}</TableCell>
                       <TableCell>{row.address2 || '-'}</TableCell>
                       {includePropertyId && (
@@ -233,6 +243,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
             <Table>
               <TableHeader>
                 <TableRow>
+                  {includeTenant && (
+                    <TableHead>Tenant Name</TableHead>
+                  )}
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
                   {includePropertyId && (
@@ -245,13 +258,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
+                    <TableCell colSpan={(includePropertyId ? 1 : 0) + (includeTenant ? 1 : 0) + 4} className="text-center py-8">
                       No exact matches found
                     </TableCell>
                   </TableRow>
                 ) : (
                   pageResults.map((row, index) => (
                     <TableRow key={index}>
+                      {includeTenant && (
+                        <TableCell>{row.tenant || '-'}</TableCell>
+                      )}
                       <TableCell className="font-medium">{row.address1}</TableCell>
                       <TableCell>{row.address2}</TableCell>
                       {includePropertyId && (
@@ -340,6 +356,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
             <Table>
               <TableHeader>
                 <TableRow>
+                  {includeTenant && (
+                    <TableHead>Tenant Name</TableHead>
+                  )}
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
                   {includePropertyId && (
@@ -352,13 +371,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
+                    <TableCell colSpan={(includePropertyId ? 1 : 0) + (includeTenant ? 1 : 0) + 4} className="text-center py-8">
                       No fuzzy matches found
                     </TableCell>
                   </TableRow>
                 ) : (
                   pageResults.map((row, index) => (
                     <TableRow key={index}>
+                      {includeTenant && (
+                        <TableCell>{row.tenant || '-'}</TableCell>
+                      )}
                       <TableCell className="font-medium">{row.address1}</TableCell>
                       <TableCell>{row.address2}</TableCell>
                       {includePropertyId && (
@@ -447,6 +469,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
             <Table>
               <TableHeader>
                 <TableRow>
+                  {includeTenant && (
+                    <TableHead>Tenant Name</TableHead>
+                  )}
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
                   {includePropertyId && (
@@ -459,13 +484,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
+                    <TableCell colSpan={(includePropertyId ? 1 : 0) + (includeTenant ? 1 : 0) + 4} className="text-center py-8">
                       No missing locations found
                     </TableCell>
                   </TableRow>
                 ) : (
                   pageResults.map((row, index) => (
                     <TableRow key={index}>
+                      {includeTenant && (
+                        <TableCell>{row.tenant || '-'}</TableCell>
+                      )}
                       <TableCell className="font-medium">{row.address1}</TableCell>
                       <TableCell>-</TableCell>
                       {includePropertyId && (
@@ -552,6 +580,9 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
             <Table>
               <TableHeader>
                 <TableRow>
+                  {includeTenant && (
+                    <TableHead>Tenant Name</TableHead>
+                  )}
                   <TableHead>Website Address</TableHead>
                   <TableHead>CoStar Address</TableHead>
                   {includePropertyId && (
@@ -564,13 +595,16 @@ const ResultsTable: React.FC<ResultsTableProps> = ({
               <TableBody>
                 {pageResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={includePropertyId ? 5 : 4} className="text-center py-8">
+                    <TableCell colSpan={(includePropertyId ? 1 : 0) + (includeTenant ? 1 : 0) + 4} className="text-center py-8">
                       No extra locations in CoStar found
                     </TableCell>
                   </TableRow>
                 ) : (
                   pageResults.map((row, index) => (
                     <TableRow key={index}>
+                      {includeTenant && (
+                        <TableCell>{row.tenant || '-'}</TableCell>
+                      )}
                       <TableCell className="font-medium">-</TableCell>
                       <TableCell>{row.address2}</TableCell>
                       {includePropertyId && (
