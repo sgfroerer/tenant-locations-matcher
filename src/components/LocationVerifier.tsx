@@ -5,14 +5,13 @@ import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Check, X } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
-
-// Lazy load Leaflet components to avoid server-side rendering issues
 import { useToast } from "@/hooks/use-toast";
 
 type Location = {
   address: string;
   propertyId?: string;
   verified?: boolean;
+  coordinates?: [number, number]; // [lat, lng]
 };
 
 interface LocationVerifierProps {
@@ -20,6 +19,52 @@ interface LocationVerifierProps {
   costarPropertyIds: Record<string, string>;
   onVerificationComplete: (verifiedAddresses: { address: string; propertyId?: string; keep: boolean }[]) => void;
 }
+
+// CSS for custom marker with pulse effect
+const mapStyles = `
+  .search-marker-icon {
+    width: 30px;
+    height: 30px;
+    position: relative;
+  }
+  
+  .search-marker-icon .marker-pin {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background-color: #3b82f6;
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    z-index: 1;
+  }
+  
+  .search-marker-icon .marker-pulse {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background-color: #3b82f6;
+    position: absolute;
+    top: 0;
+    left: 0;
+    animation: pulse 1.5s infinite ease-out;
+    opacity: 0.6;
+  }
+  
+  @keyframes pulse {
+    0% { transform: scale(0); opacity: 0.6; }
+    50% { transform: scale(1); opacity: 0.3; }
+    100% { transform: scale(1.5); opacity: 0; }
+  }
+
+  .verified-marker .marker-pin {
+    background-color: #10b981;
+  }
+
+  .current-marker .marker-pin {
+    background-color: #f97316;
+  }
+`;
 
 const LocationVerifier: React.FC<LocationVerifierProps> = ({
   costarOnlyAddresses,
@@ -32,12 +77,18 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   const [leaflet, setLeaflet] = useState<any>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
-  const markerRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const currentMarkerRef = useRef<any>(null);
   const { toast } = useToast();
   
   // Load Leaflet dynamically
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    
+    // Add style element for custom markers
+    const styleElement = document.createElement('style');
+    styleElement.textContent = mapStyles;
+    document.head.appendChild(styleElement);
     
     const loadLeaflet = async () => {
       try {
@@ -63,6 +114,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
       }
+      // Clean up style element
+      document.head.removeChild(styleElement);
     };
   }, [toast]);
   
@@ -75,6 +128,28 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     })));
   }, [costarOnlyAddresses, costarPropertyIds]);
   
+  // Create custom marker icon with pulse effect
+  const createCustomMarkerIcon = (L: any, isVerified: boolean = false, isCurrent: boolean = false) => {
+    // Create a custom HTML element for the marker
+    const markerHtml = document.createElement('div');
+    markerHtml.className = `search-marker-icon${isVerified ? ' verified-marker' : ''}${isCurrent ? ' current-marker' : ''}`;
+    
+    const pulse = document.createElement('div');
+    pulse.className = 'marker-pulse';
+    markerHtml.appendChild(pulse);
+    
+    const pin = document.createElement('div');
+    pin.className = 'marker-pin';
+    markerHtml.appendChild(pin);
+    
+    return L.divIcon({
+      html: markerHtml,
+      className: 'custom-marker-icon',
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
+    });
+  };
+  
   // Initialize map when Leaflet is loaded
   useEffect(() => {
     if (!mapLoaded || !leaflet || !mapRef.current) return;
@@ -83,56 +158,209 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       // Initialize map
       mapInstanceRef.current = leaflet.map(mapRef.current).setView([37.0902, -95.7129], 4);
       
-      // Add tile layer (OpenStreetMap)
-      leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      // Add Google Hybrid tile layer
+      leaflet.tileLayer('http://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
+        attribution: '&copy; Google Maps'
       }).addTo(mapInstanceRef.current);
     }
     
     // Update map for current location
     if (locations[currentIndex]) {
-      updateMapForAddress(locations[currentIndex].address);
+      updateMapForAddress(locations[currentIndex], true);
     }
   }, [mapLoaded, leaflet, currentIndex, locations]);
   
-  const updateMapForAddress = async (address: string) => {
+  // Geocode all locations and add markers
+  useEffect(() => {
+    if (!mapLoaded || !leaflet || !mapInstanceRef.current || locations.length === 0) return;
+    
+    // Clear all existing markers
+    markersRef.current.forEach(marker => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.removeLayer(marker);
+      }
+    });
+    markersRef.current = [];
+    
+    // Geocode and add markers for all locations
+    const geocodeAllLocations = async () => {
+      for (let i = 0; i < locations.length; i++) {
+        const location = locations[i];
+        
+        // Skip if we already have coordinates
+        if (location.coordinates) continue;
+        
+        try {
+          // Throttle API requests to avoid rate limiting
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+          
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
+          );
+          const data = await response.json();
+          
+          if (data && data.length > 0) {
+            const { lat, lon } = data[0];
+            const coordinates: [number, number] = [parseFloat(lat), parseFloat(lon)];
+            
+            // Update location with coordinates
+            const updatedLocations = [...locations];
+            updatedLocations[i] = {
+              ...updatedLocations[i],
+              coordinates
+            };
+            setLocations(updatedLocations);
+          }
+        } catch (error) {
+          console.error(`Error geocoding address ${location.address}:`, error);
+        }
+      }
+      
+      // Update the current location marker
+      updateMapForAddress(locations[currentIndex], true);
+    };
+    
+    geocodeAllLocations();
+  }, [mapLoaded, leaflet, locations.length]); // Only run when locations array length changes
+  
+  // Update markers when locations are updated with coordinates
+  useEffect(() => {
+    if (!mapLoaded || !leaflet || !mapInstanceRef.current) return;
+    
+    // Clear existing markers
+    markersRef.current.forEach(marker => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.removeLayer(marker);
+      }
+    });
+    markersRef.current = [];
+    
+    // Add markers for all locations with coordinates
+    locations.forEach((location, index) => {
+      if (location.coordinates) {
+        const isCurrentLocation = index === currentIndex;
+        
+        if (isCurrentLocation) {
+          // Don't add duplicated marker for current location
+          // It will be handled by updateMapForAddress
+          return;
+        }
+        
+        const icon = createCustomMarkerIcon(
+          leaflet, 
+          location.verified === true,
+          false
+        );
+        
+        const marker = leaflet.marker(location.coordinates, { icon })
+          .addTo(mapInstanceRef.current)
+          .bindPopup(
+            `<b>${location.address}</b>` + 
+            (location.propertyId ? `<br>ID: ${location.propertyId}` : '') + 
+            (location.verified !== undefined ? 
+              `<br>Status: ${location.verified ? 'Keep' : 'Remove'}` : 
+              '')
+          );
+        
+        markersRef.current.push(marker);
+      }
+    });
+  }, [locations, currentIndex, mapLoaded, leaflet]);
+  
+  const updateMapForAddress = async (location: Location, isCurrent: boolean = false) => {
     if (!leaflet || !mapInstanceRef.current) return;
     
     try {
+      // If we already have coordinates, use them
+      if (location.coordinates) {
+        // Update map view
+        mapInstanceRef.current.setView(location.coordinates, 16);
+        
+        // Update or create marker
+        if (currentMarkerRef.current) {
+          mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+        }
+        
+        // Create marker with custom icon
+        const icon = createCustomMarkerIcon(
+          leaflet, 
+          location.verified === true,
+          isCurrent
+        );
+        
+        currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
+          .addTo(mapInstanceRef.current)
+          .bindPopup(
+            `<b>${location.address}</b>` + 
+            (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
+          )
+          .openPopup();
+        
+        return;
+      }
+      
       // Geocode the address using Nominatim (OpenStreetMap)
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
+      );
       const data = await response.json();
       
       if (data && data.length > 0) {
         const { lat, lon } = data[0];
+        const coordinates: [number, number] = [parseFloat(lat), parseFloat(lon)];
         
-        // Update map view
-        mapInstanceRef.current.setView([lat, lon], 16);
+        // Update location with coordinates
+        const updatedLocations = [...locations];
+        const locationIndex = locations.findIndex(loc => loc.address === location.address);
         
-        // Update or create marker
-        if (markerRef.current) {
-          markerRef.current.setLatLng([lat, lon]);
-        } else {
-          markerRef.current = leaflet.marker([lat, lon]).addTo(mapInstanceRef.current);
+        if (locationIndex !== -1) {
+          updatedLocations[locationIndex] = {
+            ...updatedLocations[locationIndex],
+            coordinates
+          };
+          setLocations(updatedLocations);
         }
         
-        // Update popup
-        markerRef.current.bindPopup(address).openPopup();
+        // Update map view
+        mapInstanceRef.current.setView(coordinates, 16);
+        
+        // Update or create marker
+        if (currentMarkerRef.current) {
+          mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+        }
+        
+        // Create marker with custom icon
+        const icon = createCustomMarkerIcon(
+          leaflet, 
+          location.verified === true,
+          isCurrent
+        );
+        
+        currentMarkerRef.current = leaflet.marker(coordinates, { icon })
+          .addTo(mapInstanceRef.current)
+          .bindPopup(
+            `<b>${location.address}</b>` + 
+            (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
+          )
+          .openPopup();
+          
       } else {
         // Changed from "warning" to "default" since "warning" is not a valid variant
         toast({
           variant: "default",
           title: "Location not found",
-          description: `Could not find coordinates for "${address}"`
+          description: `Could not find coordinates for "${location.address}"`
         });
         
         // Center map on US
         mapInstanceRef.current.setView([37.0902, -95.7129], 4);
         
         // Remove marker if exists
-        if (markerRef.current) {
-          mapInstanceRef.current.removeLayer(markerRef.current);
-          markerRef.current = null;
+        if (currentMarkerRef.current) {
+          mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+          currentMarkerRef.current = null;
         }
       }
     } catch (error) {
