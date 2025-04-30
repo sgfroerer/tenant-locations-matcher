@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -158,8 +157,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       // Initialize map
       mapInstanceRef.current = leaflet.map(mapRef.current).setView([37.0902, -95.7129], 4);
       
-      // Add Google Hybrid tile layer
-      leaflet.tileLayer('http://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
+      // Add Google Hybrid tile layer with HTTPS URL
+      leaflet.tileLayer('https://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
         attribution: '&copy; Google Maps'
       }).addTo(mapInstanceRef.current);
     }
@@ -219,7 +218,9 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       }
       
       // Update the current location marker
-      updateMapForAddress(locations[currentIndex], true);
+      if (locations[currentIndex]) {
+        updateMapForAddress(locations[currentIndex], true);
+      }
     };
     
     geocodeAllLocations();
@@ -347,9 +348,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           .openPopup();
           
       } else {
-        // Changed from "warning" to "default" since "warning" is not a valid variant
         toast({
-          variant: "default",
+          variant: "default", // Using default instead of warning
           title: "Location not found",
           description: `Could not find coordinates for "${location.address}"`
         });
