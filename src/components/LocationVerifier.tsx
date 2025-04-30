@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -60,6 +61,10 @@ const mapStyles = `
     background-color: #10b981;
   }
 
+  .rejected-marker .marker-pin {
+    background-color: #ef4444;
+  }
+
   .current-marker .marker-pin {
     background-color: #f97316;
   }
@@ -76,7 +81,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   const [leaflet, setLeaflet] = useState<any>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
+  const markersRef = useRef<Map<string, any>>(new Map());
   const currentMarkerRef = useRef<any>(null);
   const { toast } = useToast();
   
@@ -120,6 +125,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   
   // Initialize locations from props
   useEffect(() => {
+    if (costarOnlyAddresses.length === 0) return;
+    
     setLocations(costarOnlyAddresses.map(address => ({
       address,
       propertyId: costarPropertyIds[address] || undefined,
@@ -128,10 +135,14 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   }, [costarOnlyAddresses, costarPropertyIds]);
   
   // Create custom marker icon with pulse effect
-  const createCustomMarkerIcon = (L: any, isVerified: boolean = false, isCurrent: boolean = false) => {
+  const createCustomMarkerIcon = (L: any, isVerified: boolean = false, isRejected: boolean = false, isCurrent: boolean = false) => {
     // Create a custom HTML element for the marker
     const markerHtml = document.createElement('div');
-    markerHtml.className = `search-marker-icon${isVerified ? ' verified-marker' : ''}${isCurrent ? ' current-marker' : ''}`;
+    let className = 'search-marker-icon';
+    if (isVerified) className += ' verified-marker';
+    if (isRejected) className += ' rejected-marker';
+    if (isCurrent) className += ' current-marker';
+    markerHtml.className = className;
     
     const pulse = document.createElement('div');
     pulse.className = 'marker-pulse';
@@ -162,38 +173,44 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         attribution: '&copy; Google Maps'
       }).addTo(mapInstanceRef.current);
     }
+  }, [mapLoaded, leaflet]);
+  
+  // Update current location when index changes
+  useEffect(() => {
+    if (!mapLoaded || !leaflet || !mapInstanceRef.current) return;
+    if (locations.length === 0 || currentIndex >= locations.length) return;
     
     // Update map for current location
-    if (locations[currentIndex]) {
-      updateMapForAddress(locations[currentIndex], true);
+    const currentLocation = locations[currentIndex];
+    if (currentLocation) {
+      updateMapForAddress(currentLocation, true);
     }
-  }, [mapLoaded, leaflet, currentIndex, locations]);
+  }, [currentIndex, locations, mapLoaded, leaflet]);
   
-  // Geocode all locations and add markers
+  // Geocode and add markers for all locations when locations array changes
   useEffect(() => {
     if (!mapLoaded || !leaflet || !mapInstanceRef.current || locations.length === 0) return;
     
-    // Clear all existing markers
-    markersRef.current.forEach(marker => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.removeLayer(marker);
-      }
+    // Clear all existing markers first
+    markersRef.current.forEach((marker) => {
+      mapInstanceRef.current.removeLayer(marker);
     });
-    markersRef.current = [];
+    markersRef.current.clear();
     
-    // Geocode and add markers for all locations
-    const geocodeAllLocations = async () => {
-      for (let i = 0; i < locations.length; i++) {
-        const location = locations[i];
-        
-        // Skip if we already have coordinates
-        if (location.coordinates) continue;
+    if (currentMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+      currentMarkerRef.current = null;
+    }
+    
+    // Geocode locations that don't have coordinates
+    const geocodeLocations = async () => {
+      const geocodingPromises = locations.map(async (location, index) => {
+        // Skip if already has coordinates
+        if (location.coordinates) return location;
         
         try {
-          // Throttle API requests to avoid rate limiting
-          if (i > 0) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
+          // Add delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, index * 200));
           
           const response = await fetch(
             `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.address)}`
@@ -202,73 +219,81 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           
           if (data && data.length > 0) {
             const { lat, lon } = data[0];
-            const coordinates: [number, number] = [parseFloat(lat), parseFloat(lon)];
-            
-            // Update location with coordinates
-            const updatedLocations = [...locations];
-            updatedLocations[i] = {
-              ...updatedLocations[i],
-              coordinates
+            return {
+              ...location,
+              coordinates: [parseFloat(lat), parseFloat(lon)] as [number, number]
             };
-            setLocations(updatedLocations);
           }
+          return location;
         } catch (error) {
           console.error(`Error geocoding address ${location.address}:`, error);
+          return location;
         }
-      }
+      });
       
-      // Update the current location marker
-      if (locations[currentIndex]) {
-        updateMapForAddress(locations[currentIndex], true);
+      // Wait for all geocoding to complete
+      const updatedLocations = await Promise.all(geocodingPromises);
+      setLocations(updatedLocations);
+      
+      // Add markers for all locations
+      updateAllMarkers(updatedLocations);
+      
+      // Focus on current location if it has coordinates
+      if (updatedLocations[currentIndex]?.coordinates) {
+        updateMapForAddress(updatedLocations[currentIndex], true);
       }
     };
     
-    geocodeAllLocations();
-  }, [mapLoaded, leaflet, locations.length]); // Only run when locations array length changes
+    geocodeLocations();
+  }, [locations.length, mapLoaded, leaflet]);
   
-  // Update markers when locations are updated with coordinates
+  // Update markers when verification status changes
   useEffect(() => {
     if (!mapLoaded || !leaflet || !mapInstanceRef.current) return;
     
-    // Clear existing markers
-    markersRef.current.forEach(marker => {
-      if (mapInstanceRef.current) {
+    // Update all markers to reflect current verification status
+    updateAllMarkers(locations);
+    
+  }, [locations.map(l => l.verified).join(','), mapLoaded, leaflet]);
+  
+  const updateAllMarkers = (locationsList: Location[]) => {
+    if (!leaflet || !mapInstanceRef.current) return;
+    
+    // Remove all current markers except the current one
+    markersRef.current.forEach((marker, address) => {
+      if (address !== locationsList[currentIndex]?.address) {
         mapInstanceRef.current.removeLayer(marker);
       }
     });
-    markersRef.current = [];
+    markersRef.current.clear();
     
     // Add markers for all locations with coordinates
-    locations.forEach((location, index) => {
-      if (location.coordinates) {
-        const isCurrentLocation = index === currentIndex;
-        
-        if (isCurrentLocation) {
-          // Don't add duplicated marker for current location
-          // It will be handled by updateMapForAddress
-          return;
-        }
-        
-        const icon = createCustomMarkerIcon(
-          leaflet, 
-          location.verified === true,
-          false
-        );
-        
-        const marker = leaflet.marker(location.coordinates, { icon })
-          .addTo(mapInstanceRef.current)
-          .bindPopup(
-            `<b>${location.address}</b>` + 
-            (location.propertyId ? `<br>ID: ${location.propertyId}` : '') + 
-            (location.verified !== undefined ? 
-              `<br>Status: ${location.verified ? 'Keep' : 'Remove'}` : 
-              '')
-          );
-        
-        markersRef.current.push(marker);
-      }
+    locationsList.forEach((location, index) => {
+      if (!location.coordinates || index === currentIndex) return;
+      
+      const icon = createCustomMarkerIcon(
+        leaflet,
+        location.verified === true,    // verified
+        location.verified === false,   // rejected
+        false                          // not current
+      );
+      
+      const marker = leaflet.marker(location.coordinates, { icon })
+        .addTo(mapInstanceRef.current);
+      
+      // Store the marker with the address as the key
+      markersRef.current.set(location.address, marker);
+      
+      // Only bind popup, don't open it by default
+      marker.bindPopup(
+        `<b>${location.address}</b>` + 
+        (location.propertyId ? `<br>ID: ${location.propertyId}` : '') + 
+        (location.verified !== undefined ? 
+          `<br>Status: ${location.verified ? 'Keep' : 'Remove'}` : 
+          '')
+      );
     });
-  }, [locations, currentIndex, mapLoaded, leaflet]);
+  };
   
   const updateMapForAddress = async (location: Location, isCurrent: boolean = false) => {
     if (!leaflet || !mapInstanceRef.current) return;
@@ -276,18 +301,23 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     try {
       // If we already have coordinates, use them
       if (location.coordinates) {
-        // Update map view
-        mapInstanceRef.current.setView(location.coordinates, 16);
+        // Update map view with animation
+        mapInstanceRef.current.flyTo(location.coordinates, 16, {
+          duration: 1.5,
+          animate: true
+        });
         
         // Update or create marker
         if (currentMarkerRef.current) {
           mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+          currentMarkerRef.current = null;
         }
         
         // Create marker with custom icon
         const icon = createCustomMarkerIcon(
           leaflet, 
           location.verified === true,
+          location.verified === false,
           isCurrent
         );
         
@@ -296,8 +326,9 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           .bindPopup(
             `<b>${location.address}</b>` + 
             (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
-          )
-          .openPopup();
+          );
+        
+        // Don't open popup by default
         
         return;
       }
@@ -325,7 +356,10 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         }
         
         // Update map view
-        mapInstanceRef.current.setView(coordinates, 16);
+        mapInstanceRef.current.flyTo(coordinates, 16, {
+          duration: 1.5,
+          animate: true
+        });
         
         // Update or create marker
         if (currentMarkerRef.current) {
@@ -336,6 +370,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         const icon = createCustomMarkerIcon(
           leaflet, 
           location.verified === true,
+          location.verified === false,
           isCurrent
         );
         
@@ -344,8 +379,9 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           .bindPopup(
             `<b>${location.address}</b>` + 
             (location.propertyId ? `<br>ID: ${location.propertyId}` : '')
-          )
-          .openPopup();
+          );
+        
+        // Don't open popup by default
           
       } else {
         toast({
@@ -374,23 +410,33 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   };
   
   const handleKeepLocation = () => {
-    const updatedLocations = [...locations];
-    updatedLocations[currentIndex] = {
-      ...updatedLocations[currentIndex],
-      verified: true
-    };
+    // Create a new array to ensure React detects the change
+    const updatedLocations = locations.map((loc, idx) => {
+      if (idx === currentIndex) {
+        return { ...loc, verified: true };
+      }
+      return loc;
+    });
+    
     setLocations(updatedLocations);
-    moveToNextLocation();
+    
+    // Add a small delay before moving to next location to allow UI to update
+    setTimeout(() => moveToNextLocation(), 300);
   };
   
   const handleRemoveLocation = () => {
-    const updatedLocations = [...locations];
-    updatedLocations[currentIndex] = {
-      ...updatedLocations[currentIndex],
-      verified: false
-    };
+    // Create a new array to ensure React detects the change
+    const updatedLocations = locations.map((loc, idx) => {
+      if (idx === currentIndex) {
+        return { ...loc, verified: false };
+      }
+      return loc;
+    });
+    
     setLocations(updatedLocations);
-    moveToNextLocation();
+    
+    // Add a small delay before moving to next location to allow UI to update
+    setTimeout(() => moveToNextLocation(), 300);
   };
   
   const moveToNextLocation = () => {
@@ -403,6 +449,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   };
   
   const selectLocation = (index: number) => {
+    if (index === currentIndex) return; // Don't do anything if clicking current location
     setCurrentIndex(index);
   };
   
@@ -437,7 +484,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
               style={{ width: `${progress}%` }}
             />
           </div>
-          <span className="text-sm font-medium">{currentIndex} of {locations.length}</span>
+          <span className="text-sm font-medium">{currentIndex + 1} of {locations.length}</span>
         </div>
       </div>
       
