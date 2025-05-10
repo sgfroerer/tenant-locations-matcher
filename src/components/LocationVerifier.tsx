@@ -215,12 +215,38 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   useEffect(() => {
     if (costarOnlyAddresses.length === 0) return;
     
-    setLocations(costarOnlyAddresses.map(address => ({
-      address,
-      propertyId: costarPropertyIds[address] || undefined,
-      tenant: costarTenantNames[address] || undefined,
-      verified: undefined
-    })));
+    // Create locations with state-based fallback coordinates
+    const locationsWithFallbacks = costarOnlyAddresses.map(address => {
+      const state = getStateFromAddress(address);
+      let fallbackCoords: [number, number] | undefined = undefined;
+      
+      if (state && fallbackCoordinatesByState[state]) {
+        // Add some randomness to avoid markers stacking
+        const randomOffset = () => (Math.random() - 0.5) * 0.5; // +/- 0.25 degrees
+        fallbackCoords = [
+          fallbackCoordinatesByState[state][0] + randomOffset(),
+          fallbackCoordinatesByState[state][1] + randomOffset()
+        ];
+      } else {
+        // Default to US center with randomness
+        const randomOffset = () => (Math.random() - 0.5) * 5; // +/- 2.5 degrees
+        fallbackCoords = [
+          defaultUSCoordinates[0] + randomOffset(),
+          defaultUSCoordinates[1] + randomOffset()
+        ];
+      }
+      
+      return {
+        address,
+        propertyId: costarPropertyIds[address] || undefined,
+        tenant: costarTenantNames[address] || undefined,
+        verified: undefined,
+        coordinates: fallbackCoords,
+        manuallyPlaced: false
+      };
+    });
+    
+    setLocations(locationsWithFallbacks);
   }, [costarOnlyAddresses, costarPropertyIds, costarTenantNames]);
   
   // Create custom marker icon with pulse effect
@@ -255,7 +281,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     
     if (!mapInstanceRef.current) {
       // Initialize map
-      mapInstanceRef.current = leaflet.map(mapRef.current).setView([37.0902, -95.7129], 4);
+      mapInstanceRef.current = leaflet.map(mapRef.current).setView(defaultUSCoordinates, 4);
       
       // Add Google Hybrid tile layer with HTTPS URL
       leaflet.tileLayer('https://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
@@ -292,10 +318,16 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           // Exit manual placement mode
           setIsManualPlacementMode(false);
           setManualPlacementHintVisible(false);
+          
+          toast({
+            title: "Location placed",
+            description: "You can now verify this location or place it somewhere else.",
+            duration: 3000
+          });
         }
       });
     }
-  }, [mapLoaded, leaflet, isManualPlacementMode]);
+  }, [mapLoaded, leaflet, isManualPlacementMode, locations, currentIndex, toast]);
   
   // Update current location when index changes
   useEffect(() => {
@@ -304,8 +336,49 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     
     // Update map for current location
     const currentLocation = locations[currentIndex];
-    if (currentLocation) {
-      updateMapForAddress(currentLocation, true);
+    
+    // Clear any existing manual marker
+    if (manualMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(manualMarkerRef.current);
+      manualMarkerRef.current = null;
+    }
+    
+    if (currentLocation && currentLocation.coordinates) {
+      // Update map view with animation
+      mapInstanceRef.current.flyTo(currentLocation.coordinates, 15, {
+        duration: 1,
+        animate: true
+      });
+      
+      // Update or create marker for current location
+      if (currentMarkerRef.current) {
+        mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+      }
+      
+      // Create marker with custom icon
+      const icon = createCustomMarkerIcon(
+        leaflet, 
+        currentLocation.verified === true,
+        currentLocation.verified === false,
+        true
+      );
+      
+      currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
+        .addTo(mapInstanceRef.current);
+      
+      // Build popup content with available information
+      let popupContent = `<b>${currentLocation.address}</b>`;
+      
+      if (currentLocation.propertyId) {
+        popupContent += `<br>ID: ${currentLocation.propertyId}`;
+      }
+      
+      if (currentLocation.tenant) {
+        popupContent += `<br>Tenant: ${currentLocation.tenant}`;
+      }
+        
+      // Bind popup but don't auto-open it
+      currentMarkerRef.current.bindPopup(popupContent);
     }
   }, [currentIndex, locations, mapLoaded, leaflet]);
   
@@ -337,41 +410,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       currentMarkerRef.current = null;
     }
     
-    // Pre-process locations with fallback coordinates by state
-    const locationsWithFallbacks = locations.map(location => {
-      if (location.coordinates) return location;
-      
-      const state = getStateFromAddress(location.address);
-      let fallbackCoords: [number, number] | undefined = undefined;
-      
-      if (state && fallbackCoordinatesByState[state]) {
-        // Add some randomness to avoid markers stacking
-        const randomOffset = () => (Math.random() - 0.5) * 0.5; // +/- 0.25 degrees
-        fallbackCoords = [
-          fallbackCoordinatesByState[state][0] + randomOffset(),
-          fallbackCoordinatesByState[state][1] + randomOffset()
-        ];
-      } else {
-        // Default to US center with randomness
-        const randomOffset = () => (Math.random() - 0.5) * 5; // +/- 2.5 degrees
-        fallbackCoords = [
-          defaultUSCoordinates[0] + randomOffset(),
-          defaultUSCoordinates[1] + randomOffset()
-        ];
-      }
-      
-      return {
-        ...location,
-        coordinates: fallbackCoords,
-        // Mark as a fallback so we know it's not accurate
-        manuallyPlaced: false
-      };
-    });
-    
-    setLocations(locationsWithFallbacks);
-    
     // Process all locations at once for marker display
-    locationsWithFallbacks.forEach((location, index) => {
+    locations.forEach((location, index) => {
       if (!location.coordinates) return;
       
       if (index === currentIndex) {
@@ -445,14 +485,14 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     });
     
     // Focus the map on the current location if it has coordinates
-    const currentLoc = locationsWithFallbacks[currentIndex];
+    const currentLoc = locations[currentIndex];
     if (currentLoc && currentLoc.coordinates) {
       mapInstanceRef.current.setView(currentLoc.coordinates, 15, {
         animate: true,
         duration: 1
       });
     }
-  }, [locations.length, mapLoaded, leaflet]);
+  }, [locations.length, mapLoaded, leaflet, currentIndex]);
   
   // Update markers when verification status changes
   useEffect(() => {
@@ -843,7 +883,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
               {currentLocation?.manuallyPlaced === false && (
                 <p className="text-xs text-amber-500 mt-1 flex items-center">
                   <MapPin className="h-3.5 w-3.5 mr-1" />
-                  Using approximate location
+                  Using approximate location - Place manually for accuracy
                 </p>
               )}
             </div>
