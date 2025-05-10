@@ -223,7 +223,7 @@ const Index = () => {
     const filename = `tenant-locations-comparison-${new Date().toISOString().split('T')[0]}`;
     
     const exportData = dataToExport.map(({ address1, address2, propertyId, tenant, score, matchType }) => ({
-      'Tenant Name': tenant || '',
+      'Tenant Name': tenant || '', // Ensure tenant name is always included
       'Website Address': address1 || '',
       'CoStar Address': address2 || '',
       'Property ID': propertyId || '',
