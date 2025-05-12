@@ -311,16 +311,16 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         
         // Add tile layer with better error handling
         try {
-          leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors',
+          leaflet.tileLayer('http://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
+            attribution: '',
             maxZoom: 19
           }).addTo(mapInstanceRef.current);
         } catch (error) {
           console.error("Error adding tile layer:", error);
           // Fallback to another tile provider if Google fails
           try {
-            leaflet.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-              attribution: '&copy; CartoDB',
+            leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              attribution: '',
               maxZoom: 19
             }).addTo(mapInstanceRef.current);
           } catch (err) {
