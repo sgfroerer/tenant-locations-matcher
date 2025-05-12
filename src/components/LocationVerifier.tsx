@@ -151,9 +151,6 @@ const fallbackCoordinatesByState: Record<string, [number, number]> = {
 // US center fallback
 const defaultUSCoordinates: [number, number] = [39.8283, -98.5795];
 
-// Helper function to add delay between geocoding requests to avoid rate limiting
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
 const LocationVerifier: React.FC<LocationVerifierProps> = ({
   costarOnlyAddresses,
   costarPropertyIds,
@@ -345,10 +342,22 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     
     if (currentLocation && currentLocation.coordinates) {
       // Update map view with animation
-      mapInstanceRef.current.flyTo(currentLocation.coordinates, 15, {
-        duration: 1,
-        animate: true
-      });
+      try {
+        mapInstanceRef.current.flyTo(currentLocation.coordinates, 15, {
+          duration: 1,
+          animate: true
+        });
+      } catch (error) {
+        console.error("Error updating map view:", error);
+        // Fallback to setView without animation on error
+        try {
+          mapInstanceRef.current.setView(currentLocation.coordinates, 15, {
+            animate: false
+          });
+        } catch (err) {
+          console.error("Failed to set map view:", err);
+        }
+      }
       
       // Update or create marker for current location
       if (currentMarkerRef.current) {
@@ -363,22 +372,26 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         true
       );
       
-      currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
-        .addTo(mapInstanceRef.current);
-      
-      // Build popup content with available information
-      let popupContent = `<b>${currentLocation.address}</b>`;
-      
-      if (currentLocation.propertyId) {
-        popupContent += `<br>ID: ${currentLocation.propertyId}`;
-      }
-      
-      if (currentLocation.tenant) {
-        popupContent += `<br>Tenant: ${currentLocation.tenant}`;
-      }
+      try {
+        currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
+          .addTo(mapInstanceRef.current);
         
-      // Bind popup but don't auto-open it
-      currentMarkerRef.current.bindPopup(popupContent);
+        // Build popup content with available information
+        let popupContent = `<b>${currentLocation.address}</b>`;
+        
+        if (currentLocation.propertyId) {
+          popupContent += `<br>ID: ${currentLocation.propertyId}`;
+        }
+        
+        if (currentLocation.tenant) {
+          popupContent += `<br>Tenant: ${currentLocation.tenant}`;
+        }
+          
+        // Bind popup but don't auto-open it
+        currentMarkerRef.current.bindPopup(popupContent);
+      } catch (err) {
+        console.error("Error adding marker to map:", err);
+      }
     }
   }, [currentIndex, locations, mapLoaded, leaflet]);
   
@@ -395,7 +408,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     }
   }, [isManualPlacementMode]);
   
-  // Setup locations with fallback coordinates if geocoding fails
+  // Setup locations on the map
   useEffect(() => {
     if (!mapLoaded || !leaflet || !mapInstanceRef.current || locations.length === 0) return;
     
@@ -427,28 +440,35 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           true
         );
         
-        currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
-          .addTo(mapInstanceRef.current);
-        
-        // Build popup content with available information
-        let popupContent = `<b>${location.address}</b>`;
-        
-        if (location.propertyId) {
-          popupContent += `<br>ID: ${location.propertyId}`;
-        }
-        
-        if (location.tenant) {
-          popupContent += `<br>Tenant: ${location.tenant}`;
-        }
+        try {
+          currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
+            .addTo(mapInstanceRef.current);
           
-        // Bind popup but don't auto-open it
-        currentMarkerRef.current.bindPopup(popupContent);
-        
-        // Center map on current location
-        mapInstanceRef.current.setView(location.coordinates, 15, {
-          animate: true,
-          duration: 1
-        });
+          // Build popup content with available information
+          let popupContent = `<b>${location.address}</b>`;
+          
+          if (location.propertyId) {
+            popupContent += `<br>ID: ${location.propertyId}`;
+          }
+          
+          if (location.tenant) {
+            popupContent += `<br>Tenant: ${location.tenant}`;
+          }
+            
+          // Bind popup but don't auto-open it
+          currentMarkerRef.current.bindPopup(popupContent);
+          
+          // Center map on current location
+          try {
+            mapInstanceRef.current.setView(location.coordinates, 15, {
+              animate: false
+            });
+          } catch (err) {
+            console.error("Failed to set map view:", err);
+          }
+        } catch (err) {
+          console.error("Error adding marker to map:", err);
+        }
       } else {
         // Other locations
         const icon = createCustomMarkerIcon(
@@ -458,39 +478,46 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           false
         );
         
-        const marker = leaflet.marker(location.coordinates, { icon })
-          .addTo(mapInstanceRef.current);
-        
-        // Store the marker with the address as the key
-        markersRef.current.set(location.address, marker);
-        
-        // Build popup content with available information
-        let popupContent = `<b>${location.address}</b>`;
-        
-        if (location.propertyId) {
-          popupContent += `<br>ID: ${location.propertyId}`;
+        try {
+          const marker = leaflet.marker(location.coordinates, { icon })
+            .addTo(mapInstanceRef.current);
+          
+          // Store the marker with the address as the key
+          markersRef.current.set(location.address, marker);
+          
+          // Build popup content with available information
+          let popupContent = `<b>${location.address}</b>`;
+          
+          if (location.propertyId) {
+            popupContent += `<br>ID: ${location.propertyId}`;
+          }
+          
+          if (location.tenant) {
+            popupContent += `<br>Tenant: ${location.tenant}`;
+          }
+          
+          if (location.verified !== undefined) {
+            popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
+          }
+          
+          // Bind popup but don't open it by default
+          marker.bindPopup(popupContent);
+        } catch (err) {
+          console.error("Error adding marker to map:", err);
         }
-        
-        if (location.tenant) {
-          popupContent += `<br>Tenant: ${location.tenant}`;
-        }
-        
-        if (location.verified !== undefined) {
-          popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
-        }
-        
-        // Bind popup but don't open it by default
-        marker.bindPopup(popupContent);
       }
     });
     
     // Focus the map on the current location if it has coordinates
     const currentLoc = locations[currentIndex];
     if (currentLoc && currentLoc.coordinates) {
-      mapInstanceRef.current.setView(currentLoc.coordinates, 15, {
-        animate: true,
-        duration: 1
-      });
+      try {
+        mapInstanceRef.current.setView(currentLoc.coordinates, 15, {
+          animate: false
+        });
+      } catch (err) {
+        console.error("Failed to set map view:", err);
+      }
     }
   }, [locations.length, mapLoaded, leaflet, currentIndex]);
   
@@ -517,215 +544,77 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       
       if (needsUpdate) {
         // Update marker icon to reflect verification status
-        mapInstanceRef.current.removeLayer(existingMarker);
-        markersRef.current.delete(location.address);
-        
-        const icon = createCustomMarkerIcon(
-          leaflet,
-          location.verified === true,
-          location.verified === false,
-          false
-        );
-        
-        const marker = leaflet.marker(location.coordinates, { icon })
-          .addTo(mapInstanceRef.current);
-        
-        // Store the marker with the address as the key
-        markersRef.current.set(location.address, marker);
-        
-        // Build popup content with available information
-        let popupContent = `<b>${location.address}</b>`;
-        
-        if (location.propertyId) {
-          popupContent += `<br>ID: ${location.propertyId}`;
+        try {
+          mapInstanceRef.current.removeLayer(existingMarker);
+          markersRef.current.delete(location.address);
+          
+          const icon = createCustomMarkerIcon(
+            leaflet,
+            location.verified === true,
+            location.verified === false,
+            false
+          );
+          
+          const marker = leaflet.marker(location.coordinates, { icon })
+            .addTo(mapInstanceRef.current);
+          
+          // Store the marker with the address as the key
+          markersRef.current.set(location.address, marker);
+          
+          // Build popup content with available information
+          let popupContent = `<b>${location.address}</b>`;
+          
+          if (location.propertyId) {
+            popupContent += `<br>ID: ${location.propertyId}`;
+          }
+          
+          if (location.tenant) {
+            popupContent += `<br>Tenant: ${location.tenant}`;
+          }
+          
+          if (location.verified !== undefined) {
+            popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
+          }
+          
+          // Bind popup but don't open it by default
+          marker.bindPopup(popupContent);
+        } catch (err) {
+          console.error("Error updating marker on map:", err);
         }
-        
-        if (location.tenant) {
-          popupContent += `<br>Tenant: ${location.tenant}`;
-        }
-        
-        if (location.verified !== undefined) {
-          popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
-        }
-        
-        // Bind popup but don't open it by default
-        marker.bindPopup(popupContent);
       }
     });
     
     // Update current marker if needed
     if (currentMarkerRef.current && currentIndex < locations.length) {
-      const currentLocation = locations[currentIndex];
-      const icon = createCustomMarkerIcon(
-        leaflet,
-        currentLocation.verified === true,
-        currentLocation.verified === false,
-        true
-      );
-      
-      mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-      
-      currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
-        .addTo(mapInstanceRef.current);
-      
-      // Build popup content with available information
-      let popupContent = `<b>${currentLocation.address}</b>`;
-      
-      if (currentLocation.propertyId) {
-        popupContent += `<br>ID: ${currentLocation.propertyId}`;
-      }
-      
-      if (currentLocation.tenant) {
-        popupContent += `<br>Tenant: ${currentLocation.tenant}`;
-      }
-        
-      // Bind popup but don't open it by default
-      currentMarkerRef.current.bindPopup(popupContent);
-    }
-  };
-  
-  const updateMapForAddress = (location: Location, isCurrent: boolean = false) => {
-    if (!leaflet || !mapInstanceRef.current) return;
-    
-    try {
-      // If we have coordinates, use them directly
-      if (location.coordinates) {
-        // Clear any existing manual marker
-        if (manualMarkerRef.current) {
-          mapInstanceRef.current.removeLayer(manualMarkerRef.current);
-          manualMarkerRef.current = null;
-        }
-        
-        // Update map view with animation
-        mapInstanceRef.current.flyTo(location.coordinates, 15, {
-          duration: 1,
-          animate: true
-        });
-        
-        // Update or create marker
-        if (currentMarkerRef.current) {
-          mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-          currentMarkerRef.current = null;
-        }
-        
-        // Create marker with custom icon
+      try {
+        const currentLocation = locations[currentIndex];
         const icon = createCustomMarkerIcon(
-          leaflet, 
-          location.verified === true,
-          location.verified === false,
-          isCurrent
+          leaflet,
+          currentLocation.verified === true,
+          currentLocation.verified === false,
+          true
         );
         
-        currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
+        mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+        
+        currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
           .addTo(mapInstanceRef.current);
         
         // Build popup content with available information
-        let popupContent = `<b>${location.address}</b>`;
+        let popupContent = `<b>${currentLocation.address}</b>`;
         
-        if (location.propertyId) {
-          popupContent += `<br>ID: ${location.propertyId}`;
+        if (currentLocation.propertyId) {
+          popupContent += `<br>ID: ${currentLocation.propertyId}`;
         }
         
-        if (location.tenant) {
-          popupContent += `<br>Tenant: ${location.tenant}`;
+        if (currentLocation.tenant) {
+          popupContent += `<br>Tenant: ${currentLocation.tenant}`;
         }
           
-        // Bind popup but don't auto-open it
+        // Bind popup but don't open it by default
         currentMarkerRef.current.bindPopup(popupContent);
-        
-        return;
-      }
-      
-      // If we don't have coordinates, use state-based fallback
-      const state = getStateFromAddress(location.address);
-      let fallbackCoords: [number, number];
-      
-      if (state && fallbackCoordinatesByState[state]) {
-        // Add some randomness to avoid markers stacking
-        const randomOffset = () => (Math.random() - 0.5) * 0.5; // +/- 0.25 degrees
-        fallbackCoords = [
-          fallbackCoordinatesByState[state][0] + randomOffset(),
-          fallbackCoordinatesByState[state][1] + randomOffset()
-        ];
-      } else {
-        // Default to US center with randomness
-        const randomOffset = () => (Math.random() - 0.5) * 5; // +/- 2.5 degrees
-        fallbackCoords = [
-          defaultUSCoordinates[0] + randomOffset(),
-          defaultUSCoordinates[1] + randomOffset()
-        ];
-      }
-      
-      // Update location with fallback coordinates
-      const updatedLocations = [...locations];
-      const locationIndex = locations.findIndex(loc => loc.address === location.address);
-      
-      if (locationIndex !== -1) {
-        updatedLocations[locationIndex] = {
-          ...updatedLocations[locationIndex],
-          coordinates: fallbackCoords,
-          manuallyPlaced: false
-        };
-        setLocations(updatedLocations);
-      }
-      
-      // Update map view
-      mapInstanceRef.current.flyTo(fallbackCoords, 15, {
-        duration: 1,
-        animate: true
-      });
-      
-      // Update or create marker
-      if (currentMarkerRef.current) {
-        mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-      }
-      
-      // Create marker with custom icon
-      const icon = createCustomMarkerIcon(
-        leaflet, 
-        location.verified === true,
-        location.verified === false,
-        isCurrent
-      );
-      
-      currentMarkerRef.current = leaflet.marker(fallbackCoords, { icon })
-        .addTo(mapInstanceRef.current);
-      
-      // Build popup content with available information
-      let popupContent = `<b>${location.address}</b>`;
-      
-      if (location.propertyId) {
-        popupContent += `<br>ID: ${location.propertyId}`;
-      }
-      
-      if (location.tenant) {
-        popupContent += `<br>Tenant: ${location.tenant}`;
-      }
-      
-      // Notify user that we're using approximate location
-      toast({
-        title: "Using approximate location",
-        description: `Could not geocode "${location.address}". Showing approximate state-level location.`,
-        duration: 3000,
-      });
-        
-      // Bind popup but don't auto-open it
-      currentMarkerRef.current.bindPopup(popupContent);
-    } catch (error) {
-      console.error("Error geocoding address:", error);
-      toast({
-        variant: "destructive",
-        title: "Map location error",
-        description: "Unable to place this address on the map. Using default US location."
-      });
-      
-      // Center map on US
-      mapInstanceRef.current.setView(defaultUSCoordinates, 4);
-      
-      // Remove marker if exists
-      if (currentMarkerRef.current) {
-        mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-        currentMarkerRef.current = null;
+      } catch (err) {
+        console.error("Error updating current marker on map:", err);
       }
     }
   };

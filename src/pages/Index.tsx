@@ -222,8 +222,10 @@ const Index = () => {
     const dataToExport = verifiedResults.length > 0 ? verifiedResults : results;
     const filename = `tenant-locations-comparison-${new Date().toISOString().split('T')[0]}`;
     
+    // Always include tenant name in exports
     const exportData = dataToExport.map(({ address1, address2, propertyId, tenant, score, matchType }) => ({
-      'Tenant Name': tenant || '', // Always include tenant name column
+      // Always include tenant name as the first column
+      'Tenant Name': tenant || '',
       'Website Address': address1 || '',
       'CoStar Address': address2 || '',
       'Property ID': propertyId || '',
@@ -421,7 +423,7 @@ const Index = () => {
                 results={verifiedResults.length > 0 ? verifiedResults : results} 
                 onExport={handleExport}
                 includePropertyId={!!source2PropertyIdColumn}
-                includeTenant={!!(source1TenantColumn || source2TenantColumn)}
+                includeTenant={true} // Always include tenant name
               />
             </Card>
           </div>
