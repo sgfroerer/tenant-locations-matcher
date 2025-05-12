@@ -80,33 +80,76 @@ export const parseClipboardText = (text: string): { data: FileData; headers: str
   return { data: result.data as FileData, headers };
 };
 
-// Helper function to detect coordinate columns in data
+// Helper function to detect coordinate columns in data with improved pattern matching
 export const detectCoordinateColumns = (headers: string[]): {
   latitudeColumn?: string;
   longitudeColumn?: string;
 } => {
-  const latPattern = /^(lat|latitude|y[-_]?coord)/i;
-  const lngPattern = /^(lon|lng|longitude|long|x[-_]?coord)/i;
+  // More comprehensive regex patterns for detecting coordinate columns
+  const latPatterns = [
+    /^(lat|latitude|y[-_]?coord)/i,
+    /^(gps[-_]?lat)/i,
+    /^(y[-_]?coordinate)/i
+  ];
   
-  const latitudeColumn = headers.find(header => latPattern.test(header));
-  const longitudeColumn = headers.find(header => lngPattern.test(header));
+  const lngPatterns = [
+    /^(lon|lng|longitude|long|x[-_]?coord)/i,
+    /^(gps[-_]?lon|gps[-_]?lng)/i,
+    /^(x[-_]?coordinate)/i
+  ];
+  
+  // Check each header against all patterns
+  const latitudeColumn = headers.find(header => 
+    latPatterns.some(pattern => pattern.test(header))
+  );
+  
+  const longitudeColumn = headers.find(header => 
+    lngPatterns.some(pattern => pattern.test(header))
+  );
   
   return { latitudeColumn, longitudeColumn };
 };
 
-// Function to extract coordinates from data if available
+// Function to normalize coordinate values
+const normalizeCoordinate = (value: string): number | null => {
+  if (!value) return null;
+  
+  // Try to parse the value as a float
+  const parsed = parseFloat(value);
+  if (isNaN(parsed)) return null;
+  
+  // Check if the value is in a valid latitude/longitude range
+  if (parsed < -180 || parsed > 180) return null;
+  
+  return parsed;
+};
+
+// Function to extract coordinates from data with improved validation
 export const extractCoordinates = (data: FileData, latCol?: string, lngCol?: string): Record<string, [number, number]> => {
   const coordinatesMap: Record<string, [number, number]> = {};
   
   if (!latCol || !lngCol) return coordinatesMap;
   
   data.forEach(row => {
-    const address = Object.values(row).join(' '); // Use a composite identifier if no specific address column
-    const lat = parseFloat(row[latCol]);
-    const lng = parseFloat(row[lngCol]);
+    // We need some kind of identifier for the location - use address or composite value
+    const addressFields = Object.keys(row).filter(key => 
+      key.toLowerCase().includes('address') || 
+      key.toLowerCase().includes('location') ||
+      key.toLowerCase().includes('street')
+    );
     
-    if (!isNaN(lat) && !isNaN(lng)) {
-      coordinatesMap[address] = [lat, lng];
+    // Use first address field found or join all values as fallback
+    const addressKey = addressFields.length > 0 ? 
+      row[addressFields[0]] : 
+      Object.values(row).join(' ').trim();
+    
+    if (!addressKey) return;
+    
+    const latValue = normalizeCoordinate(row[latCol]);
+    const lngValue = normalizeCoordinate(row[lngCol]);
+    
+    if (latValue !== null && lngValue !== null) {
+      coordinatesMap[addressKey] = [latValue, lngValue];
     }
   });
   

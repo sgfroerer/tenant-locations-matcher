@@ -87,11 +87,29 @@ const mapStyles = `
   }
 `;
 
-// Function to parse state abbreviation from address
+// Modified function to parse state abbreviation from address with improved matching
 const getStateFromAddress = (address: string): string | null => {
-  // Match state abbreviation pattern (2 uppercase letters typically at the end of the address)
-  const stateMatch = address.match(/\b([A-Z]{2})\b\s*\d{5}(?:-\d{4})?$/);
-  return stateMatch ? stateMatch[1] : null;
+  // More robust pattern for state + zip
+  const stateZipPattern = /\b([A-Z]{2})\s*\d{5}(?:-\d{4})?\b/;
+  const match = address.match(stateZipPattern);
+  
+  if (match) return match[1];
+  
+  // Fall back to checking common state abbreviations at the end of the address
+  const stateAbbrs = ['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 
+                      'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+                      'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+                      'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+                      'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'];
+                      
+  // Check for state abbreviations
+  for (const stateAbbr of stateAbbrs) {
+    if (address.includes(` ${stateAbbr} `) || address.endsWith(` ${stateAbbr}`)) {
+      return stateAbbr;
+    }
+  }
+  
+  return null;
 };
 
 // Fallback coordinates by state to center map when geocoding fails
@@ -220,20 +238,20 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       let coordinates: [number, number] | undefined = predefinedCoordinates[address];
       let manuallyPlaced = false;
       
-      // If not, try state-based fallback
+      // If not, try state-based fallback with more precise location detection
       if (!coordinates) {
         const state = getStateFromAddress(address);
         
         if (state && fallbackCoordinatesByState[state]) {
-          // Add some randomness to avoid markers stacking
-          const randomOffset = () => (Math.random() - 0.5) * 0.5; // +/- 0.25 degrees
+          // Add minimal randomness to avoid markers stacking exactly on top of each other
+          const randomOffset = () => (Math.random() - 0.5) * 0.1; // +/- 0.05 degrees
           coordinates = [
             fallbackCoordinatesByState[state][0] + randomOffset(),
             fallbackCoordinatesByState[state][1] + randomOffset()
           ];
         } else {
-          // Default to US center with randomness
-          const randomOffset = () => (Math.random() - 0.5) * 5; // +/- 2.5 degrees
+          // Default to US center with minimal randomness
+          const randomOffset = () => (Math.random() - 0.5) * 1; // +/- 0.5 degrees
           coordinates = [
             defaultUSCoordinates[0] + randomOffset(),
             defaultUSCoordinates[1] + randomOffset()
@@ -288,49 +306,97 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     
     if (!mapInstanceRef.current) {
       try {
-        // Initialize map
+        // Initialize map with better default view
         mapInstanceRef.current = leaflet.map(mapRef.current).setView(defaultUSCoordinates, 4);
         
-        // Add Google Hybrid tile layer with HTTPS URL
-        leaflet.tileLayer('https://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
-          attribution: '&copy; Google Maps'
-        }).addTo(mapInstanceRef.current);
-        
-        // Add click event for manual marker placement
-        mapInstanceRef.current.on('click', (e: any) => {
-          if (isManualPlacementMode && leaflet) {
-            const { lat, lng } = e.latlng;
-            
-            // Remove existing manual marker if any
-            if (manualMarkerRef.current) {
-              mapInstanceRef.current.removeLayer(manualMarkerRef.current);
-            }
-            
-            // Create new marker
-            manualMarkerRef.current = leaflet.marker([lat, lng], {
-              icon: createCustomMarkerIcon(leaflet, false, false, true),
-              draggable: true
+        // Add tile layer with better error handling
+        try {
+          leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 19
+          }).addTo(mapInstanceRef.current);
+        } catch (error) {
+          console.error("Error adding tile layer:", error);
+          // Fallback to another tile provider if Google fails
+          try {
+            leaflet.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+              attribution: '&copy; CartoDB',
+              maxZoom: 19
             }).addTo(mapInstanceRef.current);
-            
-            // Update the current location's coordinates
-            if (currentIndex < locations.length) {
-              const updatedLocations = [...locations];
-              updatedLocations[currentIndex] = {
-                ...updatedLocations[currentIndex],
-                coordinates: [lat, lng],
-                manuallyPlaced: true
-              };
-              setLocations(updatedLocations);
+          } catch (err) {
+            console.error("Error adding fallback tile layer:", err);
+          }
+        }
+        
+        // Add click event for manual marker placement with added error handling
+        mapInstanceRef.current.on('click', (e: any) => {
+          try {
+            if (isManualPlacementMode && leaflet) {
+              const { lat, lng } = e.latlng;
+              
+              // Remove existing manual marker if any
+              if (manualMarkerRef.current) {
+                try {
+                  mapInstanceRef.current.removeLayer(manualMarkerRef.current);
+                } catch (err) {
+                  console.error("Error removing existing marker:", err);
+                }
+              }
+              
+              try {
+                // Create new marker
+                manualMarkerRef.current = leaflet.marker([lat, lng], {
+                  icon: createCustomMarkerIcon(leaflet, false, false, true),
+                  draggable: true
+                }).addTo(mapInstanceRef.current);
+                
+                // Add drag end event to update coordinates
+                manualMarkerRef.current.on('dragend', (event: any) => {
+                  const marker = event.target;
+                  const position = marker.getLatLng();
+                  
+                  // Update the current location's coordinates
+                  if (currentIndex < locations.length) {
+                    const updatedLocations = [...locations];
+                    updatedLocations[currentIndex] = {
+                      ...updatedLocations[currentIndex],
+                      coordinates: [position.lat, position.lng],
+                      manuallyPlaced: true
+                    };
+                    setLocations(updatedLocations);
+                  }
+                });
+              } catch (err) {
+                console.error("Error creating marker:", err);
+              }
+              
+              // Update the current location's coordinates
+              if (currentIndex < locations.length) {
+                const updatedLocations = [...locations];
+                updatedLocations[currentIndex] = {
+                  ...updatedLocations[currentIndex],
+                  coordinates: [lat, lng],
+                  manuallyPlaced: true
+                };
+                setLocations(updatedLocations);
+              }
+              
+              // Exit manual placement mode
+              setIsManualPlacementMode(false);
+              setManualPlacementHintVisible(false);
+              
+              toast({
+                title: "Location placed",
+                description: "You can now verify this location or continue placing it somewhere else.",
+                duration: 3000
+              });
             }
-            
-            // Exit manual placement mode
-            setIsManualPlacementMode(false);
-            setManualPlacementHintVisible(false);
-            
+          } catch (error) {
+            console.error("Error in map click handler:", error);
             toast({
-              title: "Location placed",
-              description: "You can now verify this location or place it somewhere else.",
-              duration: 3000
+              variant: "destructive",
+              title: "Error placing marker",
+              description: "Please try again or refresh the page."
             });
           }
         });
@@ -804,7 +870,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
               ) : (
                 <p className="text-xs text-amber-500 mt-1 flex items-center">
                   <MapPin className="h-3.5 w-3.5 mr-1" />
-                  Using approximate location - Place manually for accuracy
+                  Using approximate location - Please place manually for accuracy
                 </p>
               )}
             </div>
