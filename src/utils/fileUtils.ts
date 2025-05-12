@@ -80,22 +80,28 @@ export const parseClipboardText = (text: string): { data: FileData; headers: str
   return { data: result.data as FileData, headers };
 };
 
-// Helper function to detect coordinate columns in data with improved pattern matching
+// Enhanced helper function to detect coordinate columns with more comprehensive patterns
 export const detectCoordinateColumns = (headers: string[]): {
   latitudeColumn?: string;
   longitudeColumn?: string;
 } => {
   // More comprehensive regex patterns for detecting coordinate columns
   const latPatterns = [
-    /^(lat|latitude|y[-_]?coord)/i,
-    /^(gps[-_]?lat)/i,
-    /^(y[-_]?coordinate)/i
+    /^(lat|latitude|y[-_]?coord)/i,  // Basic patterns
+    /^(gps[-_]?lat)/i,               // GPS prefixed
+    /^(y[-_]?coordinate)/i,          // Y coordinate
+    /^(geolat)/i,                    // Geo prefixed
+    /^(position[-_]?lat)/i,          // Position prefixed
+    /^(loc[-_]?lat)/i                // Location prefixed
   ];
   
   const lngPatterns = [
-    /^(lon|lng|longitude|long|x[-_]?coord)/i,
-    /^(gps[-_]?lon|gps[-_]?lng)/i,
-    /^(x[-_]?coordinate)/i
+    /^(lon|lng|longitude|long|x[-_]?coord)/i,  // Basic patterns
+    /^(gps[-_]?lon|gps[-_]?lng)/i,             // GPS prefixed
+    /^(x[-_]?coordinate)/i,                    // X coordinate
+    /^(geolon|geolng)/i,                       // Geo prefixed
+    /^(position[-_]?lon|position[-_]?lng)/i,   // Position prefixed
+    /^(loc[-_]?lon|loc[-_]?lng)/i              // Location prefixed
   ];
   
   // Check each header against all patterns
@@ -110,12 +116,24 @@ export const detectCoordinateColumns = (headers: string[]): {
   return { latitudeColumn, longitudeColumn };
 };
 
-// Function to normalize coordinate values
-const normalizeCoordinate = (value: string): number | null => {
-  if (!value) return null;
+// Enhanced function to normalize coordinate values with better validation
+const normalizeCoordinate = (value: string | number): number | null => {
+  if (value === undefined || value === null || value === '') return null;
   
+  // If value is already a number, use it directly
+  if (typeof value === 'number') {
+    // Check if within valid range and not NaN
+    if (isNaN(value) || value < -180 || value > 180) return null;
+    return value;
+  }
+  
+  // Handle string values
+  const cleanedValue = value.toString()
+    .replace(/[^\d.-]/g, '')  // Remove any non-numeric characters except decimal and minus
+    .trim();
+    
   // Try to parse the value as a float
-  const parsed = parseFloat(value);
+  const parsed = parseFloat(cleanedValue);
   if (isNaN(parsed)) return null;
   
   // Check if the value is in a valid latitude/longitude range
@@ -124,32 +142,58 @@ const normalizeCoordinate = (value: string): number | null => {
   return parsed;
 };
 
-// Function to extract coordinates from data with improved validation
+// Function to extract coordinates from data with improved validation and fallback handling
 export const extractCoordinates = (data: FileData, latCol?: string, lngCol?: string): Record<string, [number, number]> => {
   const coordinatesMap: Record<string, [number, number]> = {};
   
   if (!latCol || !lngCol) return coordinatesMap;
   
-  data.forEach(row => {
+  data.forEach((row, index) => {
     // We need some kind of identifier for the location - use address or composite value
     const addressFields = Object.keys(row).filter(key => 
       key.toLowerCase().includes('address') || 
-      key.toLowerCase().includes('location') ||
-      key.toLowerCase().includes('street')
+      key.toLowerCase().includes('location') || 
+      key.toLowerCase().includes('street') ||
+      key.toLowerCase().includes('place')
     );
     
-    // Use first address field found or join all values as fallback
-    const addressKey = addressFields.length > 0 ? 
-      row[addressFields[0]] : 
-      Object.values(row).join(' ').trim();
+    // Use first address field found or join key fields as fallback
+    let addressKey = '';
     
-    if (!addressKey) return;
+    if (addressFields.length > 0) {
+      addressKey = row[addressFields[0]]; 
+    } else {
+      // Try to create a composite key from typical address components
+      const components = [];
+      for (const key of Object.keys(row)) {
+        if (key.toLowerCase().includes('street') || 
+            key.toLowerCase().includes('ave') ||
+            key.toLowerCase().includes('city') ||
+            key.toLowerCase().includes('state') ||
+            key.toLowerCase().includes('zip')) {
+          components.push(row[key]);
+        }
+      }
+      addressKey = components.join(', ');
+    }
     
+    // If still no addressKey, use the row index as a fallback
+    if (!addressKey) {
+      addressKey = `Row ${index + 1}`;
+    }
+    
+    // Extract and normalize coordinate values 
     const latValue = normalizeCoordinate(row[latCol]);
     const lngValue = normalizeCoordinate(row[lngCol]);
     
     if (latValue !== null && lngValue !== null) {
-      coordinatesMap[addressKey] = [latValue, lngValue];
+      // Ensure the key is unique by appending index if necessary
+      let finalKey = addressKey;
+      if (coordinatesMap[addressKey]) {
+        finalKey = `${addressKey} (${index + 1})`;
+      }
+      
+      coordinatesMap[finalKey] = [latValue, lngValue];
     }
   });
   

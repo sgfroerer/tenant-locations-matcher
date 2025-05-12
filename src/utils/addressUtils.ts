@@ -37,17 +37,67 @@ const directions: Record<string, string> = {
   "SOUTHWEST": "SW",
 };
 
+// Additional street type variations
+const streetTypeVariations: Record<string, string[]> = {
+  "ST": ["STREET", "STR", "ST."],
+  "AVE": ["AVENUE", "AV", "AVE.", "AV."],
+  "BLVD": ["BOULEVARD", "BLVD.", "BLV", "BL", "BLV."],
+  "DR": ["DRIVE", "DR.", "DRV", "DRV."],
+  "RD": ["ROAD", "RD.", "R.D."],
+  "LN": ["LANE", "LN.", "LA", "LA."],
+  "HWY": ["HIGHWAY", "HIWAY", "HIGHWY", "HWY.", "HY", "H.W.Y.", "US HIGHWAY", "US HWY", "U.S. HIGHWAY", "U.S. HWY", "U.S.HWY"],
+  "PKWY": ["PARKWAY", "PKWY.", "PKY", "PARKWY", "PKWAY", "PKW", "PKW."]
+};
+
+// Normalize a street type to its standard abbreviation
+const normalizeStreetType = (streetType: string): string => {
+  const upperStreetType = streetType.toUpperCase();
+  
+  // Direct match in addressSuffixes
+  if (addressSuffixes[upperStreetType]) {
+    return addressSuffixes[upperStreetType];
+  }
+  
+  // Look in variations
+  for (const [abbr, variations] of Object.entries(streetTypeVariations)) {
+    if (variations.includes(upperStreetType)) {
+      return abbr;
+    }
+  }
+  
+  return streetType; // Return original if no match found
+};
+
 // Remove common non-address parts
 export const removeSecondaryUnits = (address: string): string => {
   return address.replace(/(STE|SUITE|UNIT|APT|#|APARTMENT|ROOM|RM|BUILDING|BLDG|FLOOR|FL)\s*[#]?[\w\d-]+,?/i, '').trim();
 };
 
-// Standardize address format
+// Extract secondary unit information
+export const extractSecondaryUnit = (address: string): string | null => {
+  const unitMatch = address.match(/(STE|SUITE|UNIT|APT|#|APARTMENT|ROOM|RM|BUILDING|BLDG|FLOOR|FL)\s*[#]?[\w\d-]+/i);
+  return unitMatch ? unitMatch[0] : null;
+};
+
+// Handle special cases for highways
+const processHighways = (address: string): string => {
+  // US Highway patterns (with variations of spacing and punctuation)
+  return address
+    .replace(/\b(US|U\.S\.|U S|U\.S|US\.)\s*(HWY|HIGHWAY|HWY\.|HIGHWAY\.)\s*(\d+)\b/i, "US HWY $3")
+    .replace(/\b(OLD)\s*(US|U\.S\.|U S|U\.S|US\.)\s*(HWY|HIGHWAY|HWY\.|HIGHWAY\.)\s*(\d+)\b/i, "OLD US HWY $4")
+    // State highway patterns
+    .replace(/\b(STATE|ST|ST\.|S\.)\s*(RTE|ROUTE|RT|RD|ROAD|HWY|HIGHWAY)\s*(\d+)\b/i, "STATE HWY $3");
+};
+
+// Standardize address format with enhanced processing
 export const standardizeAddress = (address: string): string => {
   if (!address) return '';
   
   // Convert to uppercase and remove trailing period
   let standardized = address.toUpperCase().replace(/\.$/, '');
+  
+  // Process highways first (special case)
+  standardized = processHighways(standardized);
   
   // Remove zip code (match 5 digits or 5+4 digits pattern)
   standardized = standardized.replace(/\b\d{5}(-\d{4})?\b/, '');
@@ -58,21 +108,27 @@ export const standardizeAddress = (address: string): string => {
   // Replace multiple spaces with a single space
   standardized = standardized.replace(/\s+/g, ' ');
   
-  // Remove suite, unit, apt numbers
+  // Extract and store secondary unit info before removal (but don't use it for now)
+  const secondaryUnit = extractSecondaryUnit(standardized);
+  
+  // Remove suite, unit, apt numbers for matching primary address
   standardized = removeSecondaryUnits(standardized);
   
-  // Replace address suffixes with abbreviations
-  Object.entries(addressSuffixes).forEach(([full, abbr]) => {
-    // Replace full word with abbreviation (ensure word boundary)
-    const regex = new RegExp(`\\b${full}\\b`, 'gi');
-    standardized = standardized.replace(regex, abbr);
-  });
-  
-  // Replace directions with abbreviations
-  Object.entries(directions).forEach(([full, abbr]) => {
-    const regex = new RegExp(`\\b${full}\\b`, 'gi');
-    standardized = standardized.replace(regex, abbr);
-  });
+  // Process street types with improved handling
+  const words = standardized.split(' ');
+  for (let i = 0; i < words.length; i++) {
+    // Check if this word is a street type
+    const normalizedWord = normalizeStreetType(words[i]);
+    if (normalizedWord !== words[i]) {
+      words[i] = normalizedWord;
+    }
+    
+    // Also normalize directions
+    if (directions[words[i]]) {
+      words[i] = directions[words[i]];
+    }
+  }
+  standardized = words.join(' ');
   
   // Remove common punctuation
   standardized = standardized.replace(/[,.#]/g, ' ').trim();
@@ -83,17 +139,44 @@ export const standardizeAddress = (address: string): string => {
   return standardized;
 };
 
-// Calculate similarity score between two addresses
+// Enhanced address similarity with component weighting
 export const calculateAddressSimilarity = (
   address1: string,
   address2: string
 ): number => {
   const standardized1 = standardizeAddress(address1);
   const standardized2 = standardizeAddress(address2);
-  return stringSimilarity.compareTwoStrings(standardized1, standardized2);
+  
+  // Basic string similarity
+  const basicSimilarity = stringSimilarity.compareTwoStrings(standardized1, standardized2);
+  
+  // Component-based matching for more accuracy
+  const components1 = standardized1.split(' ');
+  const components2 = standardized2.split(' ');
+  
+  // Count matching components
+  const matches = components1.filter(comp => components2.includes(comp));
+  const componentMatchRatio = matches.length / Math.max(components1.length, components2.length);
+  
+  // Weight the result (70% component match, 30% string similarity)
+  return (componentMatchRatio * 0.7) + (basicSimilarity * 0.3);
 };
 
-// Match addresses based on similarity threshold
+// Weighted component matching
+const extractAddressComponents = (address: string) => {
+  const standardized = standardizeAddress(address);
+  const parts = standardized.split(' ');
+  
+  // Very basic extraction - could be improved with regex patterns
+  return {
+    streetNumber: parts[0]?.match(/^\d+$/) ? parts[0] : '',
+    streetName: parts.slice(1, -2).join(' '), // Simplified assumption
+    city: parts[parts.length - 2] || '',
+    state: parts[parts.length - 1] || '',
+  };
+};
+
+// Match addresses based on similarity threshold with weighted components
 export const matchAddresses = (
   addresses1: string[],
   addresses2: string[]
@@ -132,7 +215,8 @@ export const matchAddresses = (
       // Find best fuzzy match if no exact match
       for (let j = 0; j < addresses2.length; j++) {
         if (!matched2.has(j)) {
-          const score = stringSimilarity.compareTwoStrings(standardized1[i], standardized2[j]);
+          // Use enhanced similarity function
+          const score = calculateAddressSimilarity(standardized1[i], standardized2[j]);
           if (score > bestScore) {
             bestScore = score;
             bestMatchIndex = j;
