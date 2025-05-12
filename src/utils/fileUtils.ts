@@ -2,6 +2,7 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
+import { batchGeocodeAddresses, enhancedGeocode } from './geocodingUtils';
 
 export type FileData = {
   [key: string]: string;
@@ -92,7 +93,8 @@ export const detectCoordinateColumns = (headers: string[]): {
     /^(y[-_]?coordinate)/i,          // Y coordinate
     /^(geolat)/i,                    // Geo prefixed
     /^(position[-_]?lat)/i,          // Position prefixed
-    /^(loc[-_]?lat)/i                // Location prefixed
+    /^(loc[-_]?lat)/i,               // Location prefixed
+    /^(y)/i                          // Simple Y
   ];
   
   const lngPatterns = [
@@ -101,7 +103,8 @@ export const detectCoordinateColumns = (headers: string[]): {
     /^(x[-_]?coordinate)/i,                    // X coordinate
     /^(geolon|geolng)/i,                       // Geo prefixed
     /^(position[-_]?lon|position[-_]?lng)/i,   // Position prefixed
-    /^(loc[-_]?lon|loc[-_]?lng)/i              // Location prefixed
+    /^(loc[-_]?lon|loc[-_]?lng)/i,             // Location prefixed
+    /^(x)/i                                    // Simple X
   ];
   
   // Check each header against all patterns
@@ -142,62 +145,139 @@ const normalizeCoordinate = (value: string | number): number | null => {
   return parsed;
 };
 
-// Function to extract coordinates from data with improved validation and fallback handling
-export const extractCoordinates = (data: FileData, latCol?: string, lngCol?: string): Record<string, [number, number]> => {
+// Function to extract coordinates from data with improved validation and fallback to geocoding
+export const extractCoordinates = async (
+  data: FileData, 
+  latCol?: string, 
+  lngCol?: string
+): Promise<Record<string, [number, number]>> => {
   const coordinatesMap: Record<string, [number, number]> = {};
   
-  if (!latCol || !lngCol) return coordinatesMap;
+  // First pass: extract explicit coordinates from the data if available
+  if (latCol && lngCol) {
+    data.forEach((row, index) => {
+      // Get full address as key
+      const addressKey = getAddressKey(row, index);
+      
+      // Extract and normalize coordinate values 
+      const latValue = normalizeCoordinate(row[latCol]);
+      const lngValue = normalizeCoordinate(row[lngCol]);
+      
+      if (latValue !== null && lngValue !== null) {
+        coordinatesMap[addressKey] = [latValue, lngValue];
+      }
+    });
+  }
+  
+  // Second pass: geocode addresses that don't have coordinates yet
+  const addressesToGeocode: string[] = [];
+  const addressIndexMap: Record<string, string> = {};
   
   data.forEach((row, index) => {
-    // We need some kind of identifier for the location - use address or composite value
-    const addressFields = Object.keys(row).filter(key => 
-      key.toLowerCase().includes('address') || 
-      key.toLowerCase().includes('location') || 
-      key.toLowerCase().includes('street') ||
-      key.toLowerCase().includes('place')
-    );
+    const addressKey = getAddressKey(row, index);
     
-    // Use first address field found or join key fields as fallback
-    let addressKey = '';
-    
-    if (addressFields.length > 0) {
-      addressKey = row[addressFields[0]]; 
-    } else {
-      // Try to create a composite key from typical address components
-      const components = [];
-      for (const key of Object.keys(row)) {
-        if (key.toLowerCase().includes('street') || 
-            key.toLowerCase().includes('ave') ||
-            key.toLowerCase().includes('city') ||
-            key.toLowerCase().includes('state') ||
-            key.toLowerCase().includes('zip')) {
-          components.push(row[key]);
-        }
-      }
-      addressKey = components.join(', ');
-    }
-    
-    // If still no addressKey, use the row index as a fallback
-    if (!addressKey) {
-      addressKey = `Row ${index + 1}`;
-    }
-    
-    // Extract and normalize coordinate values 
-    const latValue = normalizeCoordinate(row[latCol]);
-    const lngValue = normalizeCoordinate(row[lngCol]);
-    
-    if (latValue !== null && lngValue !== null) {
-      // Ensure the key is unique by appending index if necessary
-      let finalKey = addressKey;
-      if (coordinatesMap[addressKey]) {
-        finalKey = `${addressKey} (${index + 1})`;
-      }
-      
-      coordinatesMap[finalKey] = [latValue, lngValue];
+    if (!coordinatesMap[addressKey]) {
+      // Build a full address string for geocoding
+      const addressForGeocoding = buildAddressString(row);
+      addressesToGeocode.push(addressForGeocoding);
+      addressIndexMap[addressForGeocoding] = addressKey;
     }
   });
   
+  // If we have addresses to geocode, do it in batch
+  if (addressesToGeocode.length > 0) {
+    try {
+      const geocodedResults = await batchGeocodeAddresses(addressesToGeocode);
+      
+      // Add geocoded results to our coordinates map
+      for (const [geocodedAddress, coords] of Object.entries(geocodedResults)) {
+        const originalAddressKey = addressIndexMap[geocodedAddress];
+        if (originalAddressKey) {
+          coordinatesMap[originalAddressKey] = coords;
+        }
+      }
+    } catch (error) {
+      console.error("Geocoding failed:", error);
+    }
+  }
+  
   return coordinatesMap;
+};
+
+// Helper function to build a full address string from row data
+const buildAddressString = (row: Record<string, string>): string => {
+  // Try to identify address components
+  const components = [];
+  
+  // Look for common address fields
+  const streetFields = Object.keys(row).filter(key => 
+    /street|address|addr|location|add?r?e?s?s?l?i?n?e?1?/i.test(key)
+  );
+  
+  const cityFields = Object.keys(row).filter(key => 
+    /city|town|municipality/i.test(key)
+  );
+  
+  const stateFields = Object.keys(row).filter(key => 
+    /state|province|region/i.test(key)
+  );
+  
+  const zipFields = Object.keys(row).filter(key => 
+    /zip|postal|code|postcode/i.test(key)
+  );
+  
+  // Add the components in order
+  if (streetFields.length > 0) {
+    components.push(row[streetFields[0]]);
+  }
+  
+  if (cityFields.length > 0) {
+    components.push(row[cityFields[0]]);
+  }
+  
+  if (stateFields.length > 0) {
+    components.push(row[stateFields[0]]);
+  }
+  
+  if (zipFields.length > 0) {
+    components.push(row[zipFields[0]]);
+  }
+  
+  // If we couldn't find specific components, use any field that might be part of the address
+  if (components.length === 0) {
+    // Try to use any field that might contain address information
+    for (const key of Object.keys(row)) {
+      const value = row[key];
+      if (
+        typeof value === 'string' && 
+        value.length > 5 && 
+        /\d+/.test(value) && // Contains at least one number (likely part of address)
+        !/^[\d.]+$/.test(value) // Not just a number or decimal
+      ) {
+        components.push(value);
+      }
+    }
+  }
+  
+  return components.join(', ');
+};
+
+// Helper function to get a consistent address key
+const getAddressKey = (row: Record<string, string>, index: number): string => {
+  // Try to identify a full address or create one from components
+  const addressString = buildAddressString(row);
+  
+  if (addressString) {
+    return addressString;
+  }
+  
+  // Fallback: use tenant/property info if available
+  if (row.tenant || row.propertyId) {
+    return `${row.tenant || ''} ${row.propertyId || ''} (Row ${index + 1})`.trim();
+  }
+  
+  // Last resort: use row index
+  return `Row ${index + 1}`;
 };
 
 export const exportToCSV = (data: any[], fileName: string): void => {

@@ -2,9 +2,10 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Check, X, MapPin } from "lucide-react";
+import { Check, X, MapPin, Locate } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { enhancedGeocode } from '@/utils/geocodingUtils';
 
 type Location = {
   address: string;
@@ -13,6 +14,7 @@ type Location = {
   verified?: boolean;
   coordinates?: [number, number]; // [lat, lng]
   manuallyPlaced?: boolean;
+  isGeocoding?: boolean;
 };
 
 interface LocationVerifierProps {
@@ -85,87 +87,30 @@ const mapStyles = `
     pointer-events: none;
     transition: opacity 0.3s ease;
   }
-`;
 
-// Modified function to parse state abbreviation from address with improved matching
-const getStateFromAddress = (address: string): string | null => {
-  // More robust pattern for state + zip
-  const stateZipPattern = /\b([A-Z]{2})\s*\d{5}(?:-\d{4})?\b/;
-  const match = address.match(stateZipPattern);
-  
-  if (match) return match[1];
-  
-  // Fall back to checking common state abbreviations at the end of the address
-  const stateAbbrs = ['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 
-                      'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-                      'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-                      'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-                      'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'];
-                      
-  // Check for state abbreviations
-  for (const stateAbbr of stateAbbrs) {
-    if (address.includes(` ${stateAbbr} `) || address.endsWith(` ${stateAbbr}`)) {
-      return stateAbbr;
-    }
+  .geocoding-badge {
+    background-color: rgba(59, 130, 246, 0.8);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
   }
-  
-  return null;
-};
 
-// Fallback coordinates by state to center map when geocoding fails
-const fallbackCoordinatesByState: Record<string, [number, number]> = {
-  'AL': [32.806671, -86.791130], // Alabama
-  'AK': [61.370716, -152.404419], // Alaska
-  'AZ': [33.729759, -111.431221], // Arizona
-  'AR': [34.969704, -92.373123], // Arkansas
-  'CA': [36.116203, -119.681564], // California
-  'CO': [39.059811, -105.311104], // Colorado
-  'CT': [41.597782, -72.755371], // Connecticut
-  'DE': [39.318523, -75.507141], // Delaware
-  'FL': [27.766279, -81.686783], // Florida
-  'GA': [33.040619, -83.643074], // Georgia
-  'HI': [21.094318, -157.498337], // Hawaii
-  'ID': [44.240459, -114.478828], // Idaho
-  'IL': [40.349457, -88.986137], // Illinois
-  'IN': [39.849426, -86.258278], // Indiana
-  'IA': [42.011539, -93.210526], // Iowa
-  'KS': [38.526600, -96.726486], // Kansas
-  'KY': [37.668140, -84.670067], // Kentucky
-  'LA': [31.169546, -91.867805], // Louisiana
-  'ME': [44.693947, -69.381927], // Maine
-  'MD': [39.063946, -76.802101], // Maryland
-  'MA': [42.230171, -71.530106], // Massachusetts
-  'MI': [43.326618, -84.536095], // Michigan
-  'MN': [45.694454, -93.900192], // Minnesota
-  'MS': [32.741646, -89.678696], // Mississippi
-  'MO': [38.456085, -92.288368], // Missouri
-  'MT': [46.921925, -110.454353], // Montana
-  'NE': [41.125370, -98.268082], // Nebraska
-  'NV': [38.313515, -117.055374], // Nevada
-  'NH': [43.452492, -71.563896], // New Hampshire
-  'NJ': [40.298904, -74.521011], // New Jersey
-  'NM': [34.840515, -106.248482], // New Mexico
-  'NY': [42.165726, -74.948051], // New York
-  'NC': [35.630066, -79.806419], // North Carolina
-  'ND': [47.528912, -99.784012], // North Dakota
-  'OH': [40.388783, -82.764915], // Ohio
-  'OK': [35.565342, -96.928917], // Oklahoma
-  'OR': [44.572021, -122.070938], // Oregon
-  'PA': [40.590752, -77.209755], // Pennsylvania
-  'RI': [41.680893, -71.511780], // Rhode Island
-  'SC': [33.856892, -80.945007], // South Carolina
-  'SD': [44.299782, -99.438828], // South Dakota
-  'TN': [35.747845, -86.692345], // Tennessee
-  'TX': [31.054487, -97.563461], // Texas
-  'UT': [40.150032, -111.862434], // Utah
-  'VT': [44.045876, -72.710686], // Vermont
-  'VA': [37.769337, -78.169968], // Virginia
-  'WA': [47.400902, -121.490494], // Washington
-  'WV': [38.491226, -80.954453], // West Virginia
-  'WI': [44.268543, -89.616508], // Wisconsin
-  'WY': [42.755966, -107.302490], // Wyoming
-  'DC': [38.897438, -77.026817]  // District of Columbia
-};
+  .geocoding-badge.success {
+    background-color: rgba(16, 185, 129, 0.8);
+  }
+
+  .geocoding-badge.error {
+    background-color: rgba(239, 68, 68, 0.8);
+  }
+`;
 
 // US center fallback
 const defaultUSCoordinates: [number, number] = [39.8283, -98.5795];
@@ -183,6 +128,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   const [leaflet, setLeaflet] = useState<any>(null);
   const [isManualPlacementMode, setIsManualPlacementMode] = useState(false);
   const [manualPlacementHintVisible, setManualPlacementHintVisible] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [geocodingStatus, setGeocodingStatus] = useState<'idle' | 'geocoding' | 'success' | 'error'>('idle');
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<Map<string, any>>(new Map());
@@ -232,34 +179,11 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   useEffect(() => {
     if (costarOnlyAddresses.length === 0) return;
     
-    // Create locations with coordinates from predefined coordinates or state-based fallbacks
-    const locationsWithCoordinates = costarOnlyAddresses.map(address => {
-      // First check if we have predefined coordinates
+    // Create locations from addresses
+    const initialLocations = costarOnlyAddresses.map(address => {
+      // Check if we have predefined coordinates
       let coordinates: [number, number] | undefined = predefinedCoordinates[address];
-      let manuallyPlaced = false;
-      
-      // If not, try state-based fallback with more precise location detection
-      if (!coordinates) {
-        const state = getStateFromAddress(address);
-        
-        if (state && fallbackCoordinatesByState[state]) {
-          // Add minimal randomness to avoid markers stacking exactly on top of each other
-          const randomOffset = () => (Math.random() - 0.5) * 0.1; // +/- 0.05 degrees
-          coordinates = [
-            fallbackCoordinatesByState[state][0] + randomOffset(),
-            fallbackCoordinatesByState[state][1] + randomOffset()
-          ];
-        } else {
-          // Default to US center with minimal randomness
-          const randomOffset = () => (Math.random() - 0.5) * 1; // +/- 0.5 degrees
-          coordinates = [
-            defaultUSCoordinates[0] + randomOffset(),
-            defaultUSCoordinates[1] + randomOffset()
-          ];
-        }
-      } else {
-        manuallyPlaced = true; // If we have predefined coordinates, consider it as manually placed
-      }
+      let manuallyPlaced = !!coordinates;
       
       return {
         address,
@@ -267,12 +191,99 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         tenant: costarTenantNames[address] || undefined,
         verified: undefined,
         coordinates,
-        manuallyPlaced
+        manuallyPlaced,
+        isGeocoding: false
       };
     });
     
-    setLocations(locationsWithCoordinates);
+    setLocations(initialLocations);
+    
+    // Start geocoding the first location if it doesn't have coordinates
+    const firstLocation = initialLocations[0];
+    if (firstLocation && !firstLocation.coordinates) {
+      geocodeCurrentLocation(0, initialLocations);
+    }
   }, [costarOnlyAddresses, costarPropertyIds, costarTenantNames, predefinedCoordinates]);
+  
+  // Geocode the current location
+  const geocodeCurrentLocation = async (index: number, locationsList?: Location[]) => {
+    const locationsToUse = locationsList || locations;
+    if (index >= locationsToUse.length) return;
+    
+    const location = locationsToUse[index];
+    
+    // Skip if already has coordinates or is currently geocoding
+    if (location.coordinates || location.isGeocoding) return;
+    
+    // Update geocoding status
+    setGeocodingStatus('geocoding');
+    
+    // Mark location as geocoding
+    const updatedLocations = [...locationsToUse];
+    updatedLocations[index] = { ...updatedLocations[index], isGeocoding: true };
+    setLocations(updatedLocations);
+    
+    try {
+      // Use enhanced geocoding with tenant name as hint
+      const coords = await enhancedGeocode(location.address, location.tenant);
+      
+      if (coords) {
+        // Update with geocoded coordinates
+        const newLocations = [...updatedLocations];
+        newLocations[index] = { 
+          ...newLocations[index], 
+          coordinates: coords,
+          isGeocoding: false,
+          manuallyPlaced: false // Not manually placed as we got it from geocoding
+        };
+        setLocations(newLocations);
+        setGeocodingStatus('success');
+        
+        // Update map view
+        if (index === currentIndex && mapInstanceRef.current) {
+          mapInstanceRef.current.flyTo(coords, 16, {
+            animate: true,
+            duration: 1
+          });
+        }
+      } else {
+        // Geocoding failed, set default coordinates
+        const newLocations = [...updatedLocations];
+        newLocations[index] = { 
+          ...newLocations[index], 
+          coordinates: defaultUSCoordinates,
+          isGeocoding: false
+        };
+        setLocations(newLocations);
+        setGeocodingStatus('error');
+        
+        toast({
+          variant: "warning",
+          title: "Geocoding failed",
+          description: "Please place this location manually for accuracy.",
+          duration: 5000
+        });
+      }
+    } catch (error) {
+      console.error("Geocoding error:", error);
+      
+      // Update status on error
+      const newLocations = [...updatedLocations];
+      newLocations[index] = { 
+        ...newLocations[index], 
+        isGeocoding: false
+      };
+      setLocations(newLocations);
+      setGeocodingStatus('error');
+      
+      toast({
+        variant: "destructive",
+        title: "Geocoding error",
+        description: "Failed to find coordinates. Please place manually.",
+        duration: 5000
+      });
+    }
+  };
   
   // Create custom marker icon with pulse effect
   const createCustomMarkerIcon = (L: any, isVerified: boolean = false, isRejected: boolean = false, isCurrent: boolean = false) => {
@@ -306,97 +317,111 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     
     if (!mapInstanceRef.current) {
       try {
-        // Initialize map with better default view
+        // Initialize map
         mapInstanceRef.current = leaflet.map(mapRef.current).setView(defaultUSCoordinates, 4);
         
-        // Add tile layer with better error handling
-        try {
-          leaflet.tileLayer('http://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}', {
-            attribution: '',
-            maxZoom: 19
-          }).addTo(mapInstanceRef.current);
-        } catch (error) {
-          console.error("Error adding tile layer:", error);
-          // Fallback to another tile provider if Google fails
+        // Add tile layers with better error handling and fallbacks
+        const addTileLayer = (url: string, options: any) => {
           try {
-            leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              attribution: '',
-              maxZoom: 19
-            }).addTo(mapInstanceRef.current);
-          } catch (err) {
-            console.error("Error adding fallback tile layer:", err);
+            return leaflet.tileLayer(url, options).addTo(mapInstanceRef.current);
+          } catch (error) {
+            console.error(`Error adding tile layer from ${url}:`, error);
+            return null;
           }
+        };
+        
+        // Try Google Maps tiles first
+        let tileLayer = addTileLayer(
+          'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+          {
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+            maxZoom: 20
+          }
+        );
+        
+        // If Google Maps fails, try OpenStreetMap
+        if (!tileLayer) {
+          tileLayer = addTileLayer(
+            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            {
+              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+              maxZoom: 19
+            }
+          );
         }
         
-        // Add click event for manual marker placement with added error handling
-        mapInstanceRef.current.on('click', (e: any) => {
-          try {
-            if (isManualPlacementMode && leaflet) {
-              const { lat, lng } = e.latlng;
-              
-              // Remove existing manual marker if any
-              if (manualMarkerRef.current) {
-                try {
-                  mapInstanceRef.current.removeLayer(manualMarkerRef.current);
-                } catch (err) {
-                  console.error("Error removing existing marker:", err);
-                }
-              }
-              
-              try {
-                // Create new marker
-                manualMarkerRef.current = leaflet.marker([lat, lng], {
-                  icon: createCustomMarkerIcon(leaflet, false, false, true),
-                  draggable: true
-                }).addTo(mapInstanceRef.current);
-                
-                // Add drag end event to update coordinates
-                manualMarkerRef.current.on('dragend', (event: any) => {
-                  const marker = event.target;
-                  const position = marker.getLatLng();
-                  
-                  // Update the current location's coordinates
-                  if (currentIndex < locations.length) {
-                    const updatedLocations = [...locations];
-                    updatedLocations[currentIndex] = {
-                      ...updatedLocations[currentIndex],
-                      coordinates: [position.lat, position.lng],
-                      manuallyPlaced: true
-                    };
-                    setLocations(updatedLocations);
-                  }
-                });
-              } catch (err) {
-                console.error("Error creating marker:", err);
-              }
-              
-              // Update the current location's coordinates
-              if (currentIndex < locations.length) {
-                const updatedLocations = [...locations];
-                updatedLocations[currentIndex] = {
-                  ...updatedLocations[currentIndex],
-                  coordinates: [lat, lng],
-                  manuallyPlaced: true
-                };
-                setLocations(updatedLocations);
-              }
-              
-              // Exit manual placement mode
-              setIsManualPlacementMode(false);
-              setManualPlacementHintVisible(false);
-              
-              toast({
-                title: "Location placed",
-                description: "You can now verify this location or continue placing it somewhere else.",
-                duration: 3000
-              });
+        // If OpenStreetMap fails, try CartoDB as last resort
+        if (!tileLayer) {
+          addTileLayer(
+            'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            {
+              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+              subdomains: 'abcd',
+              maxZoom: 19
             }
-          } catch (error) {
-            console.error("Error in map click handler:", error);
+          );
+        }
+        
+        // Add click event for manual marker placement
+        mapInstanceRef.current.on('click', (e: any) => {
+          if (isManualPlacementMode && leaflet) {
+            const { lat, lng } = e.latlng;
+            
+            // Remove existing manual marker if any
+            if (manualMarkerRef.current) {
+              try {
+                mapInstanceRef.current.removeLayer(manualMarkerRef.current);
+              } catch (err) {
+                console.error("Error removing existing marker:", err);
+              }
+            }
+            
+            try {
+              // Create new marker
+              manualMarkerRef.current = leaflet.marker([lat, lng], {
+                icon: createCustomMarkerIcon(leaflet, false, false, true),
+                draggable: true
+              }).addTo(mapInstanceRef.current);
+              
+              // Add drag end event to update coordinates
+              manualMarkerRef.current.on('dragend', (event: any) => {
+                const marker = event.target;
+                const position = marker.getLatLng();
+                
+                // Update the current location's coordinates
+                if (currentIndex < locations.length) {
+                  const updatedLocations = [...locations];
+                  updatedLocations[currentIndex] = {
+                    ...updatedLocations[currentIndex],
+                    coordinates: [position.lat, position.lng],
+                    manuallyPlaced: true
+                  };
+                  setLocations(updatedLocations);
+                }
+              });
+            } catch (err) {
+              console.error("Error creating marker:", err);
+            }
+            
+            // Update the current location's coordinates
+            if (currentIndex < locations.length) {
+              const updatedLocations = [...locations];
+              updatedLocations[currentIndex] = {
+                ...updatedLocations[currentIndex],
+                coordinates: [lat, lng],
+                manuallyPlaced: true
+              };
+              setLocations(updatedLocations);
+            }
+            
+            // Exit manual placement mode
+            setIsManualPlacementMode(false);
+            setManualPlacementHintVisible(false);
+            
             toast({
-              variant: "destructive",
-              title: "Error placing marker",
-              description: "Please try again or refresh the page."
+              title: "Location placed",
+              description: "You can now verify this location or continue placing it somewhere else.",
+              duration: 3000
             });
           }
         });
@@ -413,206 +438,15 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   
   // Update current location when index changes
   useEffect(() => {
-    if (!mapLoaded || !leaflet || !mapInstanceRef.current) return;
-    if (locations.length === 0 || currentIndex >= locations.length) return;
-    
-    // Update map for current location
-    const currentLocation = locations[currentIndex];
-    
-    // Clear any existing manual marker
-    if (manualMarkerRef.current) {
-      mapInstanceRef.current.removeLayer(manualMarkerRef.current);
-      manualMarkerRef.current = null;
-    }
-    
-    if (currentLocation && currentLocation.coordinates) {
-      try {
-        // Update map view with animation
-        mapInstanceRef.current.flyTo(currentLocation.coordinates, 15, {
-          duration: 1,
-          animate: true
-        });
-      } catch (error) {
-        console.error("Error updating map view:", error);
-        // Fallback to setView without animation on error
-        try {
-          mapInstanceRef.current.setView(currentLocation.coordinates, 15, {
-            animate: false
-          });
-        } catch (err) {
-          console.error("Failed to set map view:", err);
-        }
-      }
+    if (currentIndex < locations.length) {
+      const location = locations[currentIndex];
       
-      // Update or create marker for current location
-      if (currentMarkerRef.current) {
-        try {
-          mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-        } catch (err) {
-          console.error("Error removing existing marker:", err);
-        }
-      }
-      
-      try {
-        // Create marker with custom icon
-        const icon = createCustomMarkerIcon(
-          leaflet, 
-          currentLocation.verified === true,
-          currentLocation.verified === false,
-          true
-        );
-        
-        currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
-          .addTo(mapInstanceRef.current);
-        
-        // Build popup content with available information
-        let popupContent = `<b>${currentLocation.address}</b>`;
-        
-        if (currentLocation.propertyId) {
-          popupContent += `<br>ID: ${currentLocation.propertyId}`;
-        }
-        
-        if (currentLocation.tenant) {
-          popupContent += `<br>Tenant: ${currentLocation.tenant}`;
-        }
-        
-        if (currentLocation.manuallyPlaced) {
-          popupContent += `<br><span style="color: green;">✓ Using provided coordinates</span>`;
-        }
-          
-        // Bind popup but don't auto-open it
-        currentMarkerRef.current.bindPopup(popupContent);
-      } catch (err) {
-        console.error("Error adding marker to map:", err);
+      // If the current location doesn't have coordinates, try to geocode it
+      if (!location.coordinates && !location.isGeocoding) {
+        geocodeCurrentLocation(currentIndex);
       }
     }
-  }, [currentIndex, locations, mapLoaded, leaflet]);
-  
-  useEffect(() => {
-    if (isManualPlacementMode) {
-      setManualPlacementHintVisible(true);
-      
-      // Hide the hint after 5 seconds
-      const timer = setTimeout(() => {
-        setManualPlacementHintVisible(false);
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [isManualPlacementMode]);
-  
-  // Setup locations on the map
-  useEffect(() => {
-    if (!mapLoaded || !leaflet || !mapInstanceRef.current || locations.length === 0) return;
-    
-    // Clear all existing markers first
-    markersRef.current.forEach((marker) => {
-      mapInstanceRef.current.removeLayer(marker);
-    });
-    markersRef.current.clear();
-    
-    if (currentMarkerRef.current) {
-      mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-      currentMarkerRef.current = null;
-    }
-    
-    // Process all locations at once for marker display
-    locations.forEach((location, index) => {
-      if (!location.coordinates) return;
-      
-      if (index === currentIndex) {
-        // Current location gets special treatment
-        if (currentMarkerRef.current) {
-          mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-        }
-        
-        const icon = createCustomMarkerIcon(
-          leaflet,
-          location.verified === true,
-          location.verified === false,
-          true
-        );
-        
-        try {
-          currentMarkerRef.current = leaflet.marker(location.coordinates, { icon })
-            .addTo(mapInstanceRef.current);
-          
-          // Build popup content with available information
-          let popupContent = `<b>${location.address}</b>`;
-          
-          if (location.propertyId) {
-            popupContent += `<br>ID: ${location.propertyId}`;
-          }
-          
-          if (location.tenant) {
-            popupContent += `<br>Tenant: ${location.tenant}`;
-          }
-            
-          // Bind popup but don't open it by default
-          currentMarkerRef.current.bindPopup(popupContent);
-          
-          // Center map on current location
-          try {
-            mapInstanceRef.current.setView(location.coordinates, 15, {
-              animate: false
-            });
-          } catch (err) {
-            console.error("Failed to set map view:", err);
-          }
-        } catch (err) {
-          console.error("Error adding marker to map:", err);
-        }
-      } else {
-        // Other locations
-        const icon = createCustomMarkerIcon(
-          leaflet,
-          location.verified === true,
-          location.verified === false,
-          false
-        );
-        
-        try {
-          const marker = leaflet.marker(location.coordinates, { icon })
-            .addTo(mapInstanceRef.current);
-          
-          // Store the marker with the address as the key
-          markersRef.current.set(location.address, marker);
-          
-          // Build popup content with available information
-          let popupContent = `<b>${location.address}</b>`;
-          
-          if (location.propertyId) {
-            popupContent += `<br>ID: ${location.propertyId}`;
-          }
-          
-          if (location.tenant) {
-            popupContent += `<br>Tenant: ${location.tenant}`;
-          }
-          
-          if (location.verified !== undefined) {
-            popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
-          }
-          
-          // Bind popup but don't open it by default
-          marker.bindPopup(popupContent);
-        } catch (err) {
-          console.error("Error adding marker to map:", err);
-        }
-      }
-    });
-    
-    // Focus the map on the current location if it has coordinates
-    const currentLoc = locations[currentIndex];
-    if (currentLoc && currentLoc.coordinates) {
-      try {
-        mapInstanceRef.current.setView(currentLoc.coordinates, 15, {
-          animate: false
-        });
-      } catch (err) {
-        console.error("Failed to set map view:", err);
-      }
-    }
-  }, [locations.length, mapLoaded, leaflet, currentIndex]);
+  }, [currentIndex, locations]);
   
   // Update markers when verification status changes
   useEffect(() => {
@@ -714,12 +548,24 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   
   const handleManualPlacement = () => {
     setIsManualPlacementMode(true);
+    setManualPlacementHintVisible(true);
     
     toast({
       title: "Manual Placement Mode",
       description: "Click anywhere on the map to place the marker for this location.",
       duration: 5000,
     });
+  };
+  
+  const handleGeocodeLocation = async () => {
+    if (currentIndex >= locations.length) return;
+    
+    const currentLocation = locations[currentIndex];
+    
+    // Skip if already geocoding
+    if (currentLocation.isGeocoding) return;
+    
+    await geocodeCurrentLocation(currentIndex);
   };
   
   const handleKeepLocation = () => {
@@ -811,6 +657,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   
   const progress = Math.round((currentIndex / locations.length) * 100);
   const currentLocation = locations[currentIndex];
+  const isCurrentLocationGeocoding = currentLocation?.isGeocoding || false;
   
   return (
     <Card className="p-6">
@@ -845,6 +692,13 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
                 Click anywhere on the map to place the location marker
               </div>
             )}
+            
+            {isCurrentLocationGeocoding && (
+              <div className={`geocoding-badge ${geocodingStatus}`}>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                <span>Geocoding address...</span>
+              </div>
+            )}
           </div>
           
           <div className="mt-4 flex flex-col md:flex-row gap-4 items-center">
@@ -865,12 +719,17 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
               {currentLocation?.manuallyPlaced ? (
                 <p className="text-xs text-green-500 mt-1 flex items-center">
                   <MapPin className="h-3.5 w-3.5 mr-1" />
-                  Using provided coordinates
+                  Using manually placed marker
+                </p>
+              ) : currentLocation?.coordinates ? (
+                <p className="text-xs text-blue-500 mt-1 flex items-center">
+                  <MapPin className="h-3.5 w-3.5 mr-1" />
+                  Using geocoded coordinates
                 </p>
               ) : (
                 <p className="text-xs text-amber-500 mt-1 flex items-center">
                   <MapPin className="h-3.5 w-3.5 mr-1" />
-                  Using approximate location - Please place manually for accuracy
+                  No location data - please geocode or place manually
                 </p>
               )}
             </div>
@@ -878,9 +737,19 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
+                onClick={handleGeocodeLocation}
+                className="flex gap-2 items-center"
+                disabled={isCurrentLocationGeocoding || isManualPlacementMode}
+              >
+                <Locate size={16} className={isCurrentLocationGeocoding ? "animate-pulse" : ""} />
+                {isCurrentLocationGeocoding ? "Geocoding..." : "Geocode Address"}
+              </Button>
+              
+              <Button
+                variant="outline"
                 onClick={handleManualPlacement}
                 className="flex gap-2 items-center"
-                disabled={isManualPlacementMode}
+                disabled={isManualPlacementMode || isCurrentLocationGeocoding}
               >
                 <MapPin size={16} /> Place on Map
               </Button>
@@ -890,6 +759,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
                 size="lg"
                 onClick={handleRemoveLocation}
                 className="flex gap-2 items-center"
+                disabled={isCurrentLocationGeocoding}
               >
                 <X size={18} /> Remove
               </Button>
@@ -898,6 +768,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
                 size="lg"
                 onClick={handleKeepLocation}
                 className="flex gap-2 items-center"
+                disabled={isCurrentLocationGeocoding}
               >
                 <Check size={18} /> Keep
               </Button>
@@ -928,8 +799,17 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
                       {location.tenant && (
                         <p className="text-xs text-muted-foreground">Tenant: {location.tenant}</p>
                       )}
-                      {location.manuallyPlaced && (
-                        <p className="text-xs text-green-500">Using provided coordinates</p>
+                      {location.isGeocoding && (
+                        <p className="text-xs text-blue-500 flex items-center">
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500 mr-1"></div>
+                          Geocoding...
+                        </p>
+                      )}
+                      {!location.isGeocoding && location.manuallyPlaced && (
+                        <p className="text-xs text-green-500">Manually placed</p>
+                      )}
+                      {!location.isGeocoding && !location.manuallyPlaced && location.coordinates && (
+                        <p className="text-xs text-blue-500">Geocoded</p>
                       )}
                     </div>
                     {location.verified !== undefined && (
