@@ -80,6 +80,39 @@ export const parseClipboardText = (text: string): { data: FileData; headers: str
   return { data: result.data as FileData, headers };
 };
 
+// Helper function to detect coordinate columns in data
+export const detectCoordinateColumns = (headers: string[]): {
+  latitudeColumn?: string;
+  longitudeColumn?: string;
+} => {
+  const latPattern = /^(lat|latitude|y[-_]?coord)/i;
+  const lngPattern = /^(lon|lng|longitude|long|x[-_]?coord)/i;
+  
+  const latitudeColumn = headers.find(header => latPattern.test(header));
+  const longitudeColumn = headers.find(header => lngPattern.test(header));
+  
+  return { latitudeColumn, longitudeColumn };
+};
+
+// Function to extract coordinates from data if available
+export const extractCoordinates = (data: FileData, latCol?: string, lngCol?: string): Record<string, [number, number]> => {
+  const coordinatesMap: Record<string, [number, number]> = {};
+  
+  if (!latCol || !lngCol) return coordinatesMap;
+  
+  data.forEach(row => {
+    const address = Object.values(row).join(' '); // Use a composite identifier if no specific address column
+    const lat = parseFloat(row[latCol]);
+    const lng = parseFloat(row[lngCol]);
+    
+    if (!isNaN(lat) && !isNaN(lng)) {
+      coordinatesMap[address] = [lat, lng];
+    }
+  });
+  
+  return coordinatesMap;
+};
+
 export const exportToCSV = (data: any[], fileName: string): void => {
   const csv = Papa.unparse(data);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

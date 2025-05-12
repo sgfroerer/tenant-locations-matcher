@@ -6,7 +6,13 @@ import FileUploader from '@/components/FileUploader';
 import ColumnSelector from '@/components/ColumnSelector';
 import ResultsTable from '@/components/ResultsTable';
 import LocationVerifier from '@/components/LocationVerifier';
-import { FileData, exportToCSV, exportToExcel } from '@/utils/fileUtils';
+import { 
+  FileData, 
+  exportToCSV, 
+  exportToExcel, 
+  detectCoordinateColumns,
+  extractCoordinates 
+} from '@/utils/fileUtils';
 import { matchAddresses } from '@/utils/addressUtils';
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
@@ -27,17 +33,25 @@ const Index = () => {
   const [source2Headers, setSource2Headers] = useState<string[]>([]);
   const [source1AddressColumn, setSource1AddressColumn] = useState<string>('');
   const [source1TenantColumn, setSource1TenantColumn] = useState<string>('');
+  const [source1LatColumn, setSource1LatColumn] = useState<string>('');
+  const [source1LngColumn, setSource1LngColumn] = useState<string>('');
   const [source2AddressColumn, setSource2AddressColumn] = useState<string>('');
   const [source2PropertyIdColumn, setSource2PropertyIdColumn] = useState<string>('');
   const [source2TenantColumn, setSource2TenantColumn] = useState<string>('');
+  const [source2LatColumn, setSource2LatColumn] = useState<string>('');
+  const [source2LngColumn, setSource2LngColumn] = useState<string>('');
   const [results, setResults] = useState<ResultRow[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [verificationStep, setVerificationStep] = useState(false);
   const [verifiedResults, setVerifiedResults] = useState<ResultRow[]>([]);
+  const [coordinatesMap, setCoordinatesMap] = useState<Record<string, [number, number]>>({});
   const { toast } = useToast();
   
   const handleFileParsed = (data: FileData, headers: string[], fileType: 'source1' | 'source2') => {
+    // Detect coordinate columns
+    const { latitudeColumn, longitudeColumn } = detectCoordinateColumns(headers);
+    
     if (fileType === 'source1') {
       setSource1Data(data);
       setSource1Headers(headers);
@@ -65,6 +79,11 @@ const Index = () => {
       if (tenantColumn) {
         setSource1TenantColumn(tenantColumn);
       }
+      
+      // Set coordinates columns if found
+      if (latitudeColumn) setSource1LatColumn(latitudeColumn);
+      if (longitudeColumn) setSource1LngColumn(longitudeColumn);
+      
     } else {
       setSource2Data(data);
       setSource2Headers(headers);
@@ -102,6 +121,10 @@ const Index = () => {
       if (tenantColumn) {
         setSource2TenantColumn(tenantColumn);
       }
+      
+      // Set coordinates columns if found
+      if (latitudeColumn) setSource2LatColumn(latitudeColumn);
+      if (longitudeColumn) setSource2LngColumn(longitudeColumn);
     }
   };
 
@@ -130,6 +153,24 @@ const Index = () => {
       // Create mapping of addresses to property IDs and tenant names if column is selected
       const propertyIdMapping: Record<string, string> = {};
       const tenantMapping: Record<string, string> = {};
+      
+      // Extract coordinates if available from either source
+      let coordinates: Record<string, [number, number]> = {};
+      
+      // Extract coordinates from source 1 if lat/lng columns are selected
+      if (source1LatColumn && source1LngColumn) {
+        const source1Coordinates = extractCoordinates(source1Data, source1LatColumn, source1LngColumn);
+        coordinates = { ...coordinates, ...source1Coordinates };
+      }
+      
+      // Extract coordinates from source 2 if lat/lng columns are selected
+      if (source2LatColumn && source2LngColumn) {
+        const source2Coordinates = extractCoordinates(source2Data, source2LatColumn, source2LngColumn);
+        coordinates = { ...coordinates, ...source2Coordinates };
+      }
+      
+      // Store coordinates for later use
+      setCoordinatesMap(coordinates);
       
       // Source 1 tenant mapping
       if (source1TenantColumn) {
@@ -303,6 +344,24 @@ const Index = () => {
                       label="Select tenant name column (optional)"
                       placeholder="Select tenant name column"
                     />
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <ColumnSelector
+                        headers={source1Headers}
+                        selectedColumn={source1LatColumn}
+                        onChange={setSource1LatColumn}
+                        label="Latitude column (optional)"
+                        placeholder="Select latitude column"
+                      />
+                      
+                      <ColumnSelector
+                        headers={source1Headers}
+                        selectedColumn={source1LngColumn}
+                        onChange={setSource1LngColumn}
+                        label="Longitude column (optional)"
+                        placeholder="Select longitude column"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -339,6 +398,24 @@ const Index = () => {
                       label="Select tenant name column (optional)"
                       placeholder="Select tenant name column"
                     />
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <ColumnSelector
+                        headers={source2Headers}
+                        selectedColumn={source2LatColumn}
+                        onChange={setSource2LatColumn}
+                        label="Latitude column (optional)"
+                        placeholder="Select latitude column"
+                      />
+                      
+                      <ColumnSelector
+                        headers={source2Headers}
+                        selectedColumn={source2LngColumn}
+                        onChange={setSource2LngColumn}
+                        label="Longitude column (optional)"
+                        placeholder="Select longitude column"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -382,6 +459,7 @@ const Index = () => {
               costarOnlyAddresses={costarOnlyAddresses}
               costarPropertyIds={costarPropertyIds}
               costarTenantNames={costarTenantNames}
+              predefinedCoordinates={coordinatesMap}
               onVerificationComplete={handleVerificationComplete}
             />
           </div>
