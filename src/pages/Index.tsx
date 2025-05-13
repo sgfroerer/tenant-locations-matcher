@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -157,85 +156,114 @@ const Index = () => {
       // Extract coordinates if available from either source
       let coordinates: Record<string, [number, number]> = {};
       
-      // Extract coordinates from source 1 if lat/lng columns are selected
-      if (source1LatColumn && source1LngColumn) {
-        const source1Coordinates = extractCoordinates(source1Data, source1LatColumn, source1LngColumn);
-        coordinates = { ...coordinates, ...source1Coordinates };
-      }
-      
-      // Extract coordinates from source 2 if lat/lng columns are selected
-      if (source2LatColumn && source2LngColumn) {
-        const source2Coordinates = extractCoordinates(source2Data, source2LatColumn, source2LngColumn);
-        coordinates = { ...coordinates, ...source2Coordinates };
-      }
-      
-      // Store coordinates for later use
-      setCoordinatesMap(coordinates);
-      
-      // Source 1 tenant mapping
-      if (source1TenantColumn) {
-        source1Data.forEach(row => {
-          const address = row[source1AddressColumn];
-          const tenant = row[source1TenantColumn];
-          if (address && tenant) {
-            tenantMapping[address] = tenant;
-          }
-        });
-      }
-      
-      // Source 2 property ID and tenant mapping
-      source2Data.forEach(row => {
-        const address = row[source2AddressColumn];
-        if (address) {
-          if (source2PropertyIdColumn) {
-            const propertyId = row[source2PropertyIdColumn];
-            if (propertyId) {
-              propertyIdMapping[address] = propertyId;
-            }
+      // Handle async operations with proper awaiting
+      const extractAndProcessCoordinates = async () => {
+        try {
+          // Extract coordinates from source 1 if lat/lng columns are selected
+          if (source1LatColumn && source1LngColumn) {
+            const source1Coordinates = await extractCoordinates(source1Data, source1LatColumn, source1LngColumn);
+            coordinates = { ...coordinates, ...source1Coordinates };
           }
           
-          if (source2TenantColumn) {
-            const tenant = row[source2TenantColumn];
-            if (tenant) {
-              tenantMapping[address] = tenant;
-            }
+          // Extract coordinates from source 2 if lat/lng columns are selected
+          if (source2LatColumn && source2LngColumn) {
+            const source2Coordinates = await extractCoordinates(source2Data, source2LatColumn, source2LngColumn);
+            coordinates = { ...coordinates, ...source2Coordinates };
           }
+          
+          // Store coordinates for later use
+          setCoordinatesMap(coordinates);
+          
+          // Continue with the rest of the processing
+          continueProcessing();
+        } catch (error) {
+          setIsProcessing(false);
+          toast({
+            variant: "destructive",
+            title: "Error extracting coordinates",
+            description: error instanceof Error ? error.message : "An unknown error occurred",
+          });
         }
-      });
+      };
+
+      const continueProcessing = () => {
+        try {
+          // Source 1 tenant mapping
+          if (source1TenantColumn) {
+            source1Data.forEach(row => {
+              const address = row[source1AddressColumn];
+              const tenant = row[source1TenantColumn];
+              if (address && tenant) {
+                tenantMapping[address] = tenant;
+              }
+            });
+          }
+          
+          // Source 2 property ID and tenant mapping
+          source2Data.forEach(row => {
+            const address = row[source2AddressColumn];
+            if (address) {
+              if (source2PropertyIdColumn) {
+                const propertyId = row[source2PropertyIdColumn];
+                if (propertyId) {
+                  propertyIdMapping[address] = propertyId;
+                }
+              }
+              
+              if (source2TenantColumn) {
+                const tenant = row[source2TenantColumn];
+                if (tenant) {
+                  tenantMapping[address] = tenant;
+                }
+              }
+            }
+          });
+          
+          // Perform matching
+          const matchResults = matchAddresses(addresses1, addresses2);
+          
+          // Add property IDs and tenant names to results
+          const resultsWithMetadata = matchResults.map(result => ({
+            ...result,
+            propertyId: result.address2 ? propertyIdMapping[result.address2] : undefined,
+            tenant: result.address1 ? tenantMapping[result.address1] : 
+                    result.address2 ? tenantMapping[result.address2] : undefined
+          }));
+          
+          setResults(resultsWithMetadata);
+          
+          // Check if there are any CoStar-only locations that need verification
+          const costarOnly = resultsWithMetadata.filter(r => !r.address1 && r.address2);
+          
+          if (costarOnly.length > 0) {
+            setVerificationStep(true);
+          } else {
+            setShowResults(true);
+          }
+          
+          toast({
+            title: "Comparison complete",
+            description: `Found ${resultsWithMetadata.filter(r => r.matchType === 'exact').length} exact matches, ${resultsWithMetadata.filter(r => r.matchType === 'fuzzy').length} fuzzy matches`,
+          });
+        } catch (error) {
+          toast({
+            variant: "destructive",
+            title: "Error processing data",
+            description: error instanceof Error ? error.message : "An unknown error occurred",
+          });
+        } finally {
+          setIsProcessing(false);
+        }
+      };
       
-      // Perform matching
-      const matchResults = matchAddresses(addresses1, addresses2);
-      
-      // Add property IDs and tenant names to results
-      const resultsWithMetadata = matchResults.map(result => ({
-        ...result,
-        propertyId: result.address2 ? propertyIdMapping[result.address2] : undefined,
-        tenant: result.address1 ? tenantMapping[result.address1] : 
-                result.address2 ? tenantMapping[result.address2] : undefined
-      }));
-      
-      setResults(resultsWithMetadata);
-      
-      // Check if there are any CoStar-only locations that need verification
-      const costarOnly = resultsWithMetadata.filter(r => !r.address1 && r.address2);
-      
-      if (costarOnly.length > 0) {
-        setVerificationStep(true);
-      } else {
-        setShowResults(true);
-      }
-      
-      toast({
-        title: "Comparison complete",
-        description: `Found ${resultsWithMetadata.filter(r => r.matchType === 'exact').length} exact matches, ${resultsWithMetadata.filter(r => r.matchType === 'fuzzy').length} fuzzy matches`,
-      });
+      // Start the process
+      extractAndProcessCoordinates();
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Error processing data",
         description: error instanceof Error ? error.message : "An unknown error occurred",
       });
-    } finally {
       setIsProcessing(false);
     }
   };

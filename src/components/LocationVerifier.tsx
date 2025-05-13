@@ -258,7 +258,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         setGeocodingStatus('error');
         
         toast({
-          variant: "warning",
+          variant: "destructive",
           title: "Geocoding failed",
           description: "Please place this location manually for accuracy.",
           duration: 5000
