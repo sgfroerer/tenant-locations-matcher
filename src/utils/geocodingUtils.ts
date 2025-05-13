@@ -95,17 +95,57 @@ export const batchGeocodeAddresses = async (
   return results;
 };
 
-// For specific business location types
-const BUSINESS_TYPES = {
+// More comprehensive business types for various businesses
+const BUSINESS_TYPES: Record<string, string[]> = {
+  // Retail stores
   'petsmart': ['pet store', 'pet shop', 'pet supply'],
+  'petco': ['pet store', 'pet shop', 'pet supply'],
   'walmart': ['supermarket', 'department store', 'walmart'],
-  'target': ['department store', 'target'],
+  'target': ['department store', 'target', 'retail'],
+  'costco': ['wholesale', 'supermarket', 'costco'],
   'home depot': ['hardware store', 'home improvement'],
   'lowes': ['hardware store', 'home improvement'],
+  'best buy': ['electronics store', 'technology'],
+  'apple store': ['electronics store', 'technology'],
+  'ikea': ['furniture store', 'home furnishings'],
+  
+  // Food & restaurants
+  'mcdonalds': ['restaurant', 'fast food', 'burger'],
+  'burger king': ['restaurant', 'fast food', 'burger'],
+  'wendys': ['restaurant', 'fast food', 'burger'],
+  'taco bell': ['restaurant', 'fast food', 'mexican'],
+  'chipotle': ['restaurant', 'mexican', 'fast casual'],
+  'starbucks': ['cafe', 'coffee shop', 'coffeehouse'],
+  'subway': ['restaurant', 'sandwich shop', 'fast food'],
+  
+  // Gas stations
+  'shell': ['gas station', 'fuel', 'service station'],
+  'bp': ['gas station', 'fuel', 'service station'],
+  'exxon': ['gas station', 'fuel', 'service station'],
+  
+  // Hotels
+  'marriott': ['hotel', 'lodging', 'accommodation'],
+  'hilton': ['hotel', 'lodging', 'accommodation'],
+  'holiday inn': ['hotel', 'lodging', 'accommodation'],
+  
+  // Banks
+  'bank of america': ['bank', 'financial institution'],
+  'chase': ['bank', 'financial institution'],
+  'wells fargo': ['bank', 'financial institution'],
+  
+  // Default case - generic business types by category
+  'store': ['store', 'retail', 'shop'],
+  'restaurant': ['restaurant', 'eatery', 'dining'],
+  'hotel': ['hotel', 'motel', 'lodging'],
+  'bank': ['bank', 'financial institution'],
+  'gas': ['gas station', 'fuel', 'service station'],
+  'pharmacy': ['pharmacy', 'drug store'],
+  'grocery': ['grocery store', 'supermarket'],
 };
 
 /**
  * Enhanced geocoding with business type hints for better accuracy
+ * Uses business name to determine likely business type for better geocoding
  */
 export const enhancedGeocode = async (
   address: string, 
@@ -123,10 +163,31 @@ export const enhancedGeocode = async (
       // Find matching business types
       let businessTypes: string[] = [];
       
+      // Try to find an exact match first
       for (const [key, types] of Object.entries(BUSINESS_TYPES)) {
         if (lowerBusinessName.includes(key)) {
           businessTypes = types;
           break;
+        }
+      }
+      
+      // If no exact match, try to categorize based on common terms
+      if (businessTypes.length === 0) {
+        // Check for generic business categories
+        if (/restaurant|diner|cafe|grill|bar|pub/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['restaurant'];
+        } else if (/store|shop|mart|retail/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['store'];
+        } else if (/hotel|inn|suites|lodging/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['hotel'];
+        } else if (/bank|credit union|financial/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['bank'];
+        } else if (/gas|petrol|fuel|station/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['gas'];
+        } else if (/pharmacy|drug|rx/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['pharmacy'];
+        } else if (/grocery|food|market/i.test(lowerBusinessName)) {
+          businessTypes = BUSINESS_TYPES['grocery'];
         }
       }
       
@@ -137,6 +198,12 @@ export const enhancedGeocode = async (
           const result = await geocodeAddress(enhancedAddress);
           if (result) return result;
         }
+      }
+      
+      // As a last resort, try with just the business name and address
+      if (businessName) {
+        const namedAddress = `${businessName} ${address}`;
+        return await geocodeAddress(namedAddress);
       }
     }
     

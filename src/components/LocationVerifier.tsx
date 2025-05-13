@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Check, X, MapPin, Locate } from "lucide-react";
+import { Check, X, MapPin, Locate, AlertCircle } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { enhancedGeocode } from '@/utils/geocodingUtils';
@@ -245,9 +245,12 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
             animate: true,
             duration: 1
           });
+          
+          // Make sure the marker is visible
+          updateCurrentMarker(coords);
         }
       } else {
-        // Geocoding failed, set default coordinates
+        // Geocoding failed, set default coordinates for US view
         const newLocations = [...updatedLocations];
         newLocations[index] = { 
           ...newLocations[index], 
@@ -311,6 +314,46 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     });
   };
   
+  // New helper function to update the current marker
+  const updateCurrentMarker = (coordinates: [number, number]) => {
+    if (!leaflet || !mapInstanceRef.current) return;
+    
+    try {
+      // Remove existing current marker if any
+      if (currentMarkerRef.current) {
+        mapInstanceRef.current.removeLayer(currentMarkerRef.current);
+      }
+      
+      // Create new current marker
+      const currentLocation = locations[currentIndex];
+      const icon = createCustomMarkerIcon(
+        leaflet,
+        currentLocation?.verified === true,
+        currentLocation?.verified === false,
+        true
+      );
+      
+      currentMarkerRef.current = leaflet.marker(coordinates, { icon })
+        .addTo(mapInstanceRef.current);
+      
+      // Build popup content with available information
+      let popupContent = `<b>${currentLocation?.address || 'Current Location'}</b>`;
+      
+      if (currentLocation?.propertyId) {
+        popupContent += `<br>ID: ${currentLocation.propertyId}`;
+      }
+      
+      if (currentLocation?.tenant) {
+        popupContent += `<br>Tenant: ${currentLocation.tenant}`;
+      }
+        
+      // Bind popup but don't open it by default
+      currentMarkerRef.current.bindPopup(popupContent);
+    } catch (err) {
+      console.error("Error updating current marker on map:", err);
+    }
+  };
+  
   // Initialize map when Leaflet is loaded
   useEffect(() => {
     if (!mapLoaded || !leaflet || !mapRef.current) return;
@@ -330,29 +373,18 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           }
         };
         
-        // Try Google Maps tiles first
+        // Try OpenStreetMap tiles first as they're more reliable
         let tileLayer = addTileLayer(
-          'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
           {
-            subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-            maxZoom: 20
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            maxZoom: 19
           }
         );
         
-        // If Google Maps fails, try OpenStreetMap
+        // If OpenStreetMap fails, try CartoDB as fallback
         if (!tileLayer) {
           tileLayer = addTileLayer(
-            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            {
-              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-              maxZoom: 19
-            }
-          );
-        }
-        
-        // If OpenStreetMap fails, try CartoDB as last resort
-        if (!tileLayer) {
-          addTileLayer(
             'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
             {
               attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -436,7 +468,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     }
   }, [mapLoaded, leaflet, isManualPlacementMode, locations, currentIndex, toast]);
   
-  // Update current location when index changes
+  // Update current location when index changes and force marker updates
   useEffect(() => {
     if (currentIndex < locations.length) {
       const location = locations[currentIndex];
@@ -444,8 +476,23 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
       // If the current location doesn't have coordinates, try to geocode it
       if (!location.coordinates && !location.isGeocoding) {
         geocodeCurrentLocation(currentIndex);
+      } else if (location.coordinates) {
+        // If location has coordinates, update the map view and marker
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.flyTo(location.coordinates, 16, {
+            animate: true,
+            duration: 1
+          });
+          
+          // Make sure the marker is visible
+          updateCurrentMarker(location.coordinates);
+        }
       }
     }
+    
+    // Refresh all markers to ensure they are visible
+    updateAllMarkers();
+    
   }, [currentIndex, locations]);
   
   // Update markers when verification status changes
@@ -460,88 +507,62 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
   const updateAllMarkers = () => {
     if (!leaflet || !mapInstanceRef.current) return;
     
-    // Only update markers that need to change
+    // Clear all existing markers except current to prevent duplicates
+    markersRef.current.forEach((marker) => {
+      try {
+        mapInstanceRef.current.removeLayer(marker);
+      } catch (err) {
+        console.error("Error removing marker:", err);
+      }
+    });
+    
+    markersRef.current = new Map();
+    
+    // Add markers for all locations with coordinates
     locations.forEach((location, index) => {
       if (!location.coordinates || index === currentIndex) return;
       
-      const existingMarker = markersRef.current.get(location.address);
-      const needsUpdate = existingMarker && 
-        ((location.verified === true && !existingMarker.options.icon.options.html.classList.contains('verified-marker')) ||
-         (location.verified === false && !existingMarker.options.icon.options.html.classList.contains('rejected-marker')));
-      
-      if (needsUpdate) {
-        // Update marker icon to reflect verification status
-        try {
-          mapInstanceRef.current.removeLayer(existingMarker);
-          markersRef.current.delete(location.address);
-          
-          const icon = createCustomMarkerIcon(
-            leaflet,
-            location.verified === true,
-            location.verified === false,
-            false
-          );
-          
-          const marker = leaflet.marker(location.coordinates, { icon })
-            .addTo(mapInstanceRef.current);
-          
-          // Store the marker with the address as the key
-          markersRef.current.set(location.address, marker);
-          
-          // Build popup content with available information
-          let popupContent = `<b>${location.address}</b>`;
-          
-          if (location.propertyId) {
-            popupContent += `<br>ID: ${location.propertyId}`;
-          }
-          
-          if (location.tenant) {
-            popupContent += `<br>Tenant: ${location.tenant}`;
-          }
-          
-          if (location.verified !== undefined) {
-            popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
-          }
-          
-          // Bind popup but don't open it by default
-          marker.bindPopup(popupContent);
-        } catch (err) {
-          console.error("Error updating marker on map:", err);
+      try {
+        const icon = createCustomMarkerIcon(
+          leaflet,
+          location.verified === true,
+          location.verified === false,
+          false
+        );
+        
+        const marker = leaflet.marker(location.coordinates, { icon })
+          .addTo(mapInstanceRef.current);
+        
+        // Build popup content with available information
+        let popupContent = `<b>${location.address}</b>`;
+        
+        if (location.propertyId) {
+          popupContent += `<br>ID: ${location.propertyId}`;
         }
+        
+        if (location.tenant) {
+          popupContent += `<br>Tenant: ${location.tenant}`;
+        }
+        
+        if (location.verified !== undefined) {
+          popupContent += `<br>Status: ${location.verified ? 'Keep' : 'Remove'}`;
+        }
+        
+        // Bind popup but don't open it by default
+        marker.bindPopup(popupContent);
+        
+        // Store the marker with the address as the key
+        markersRef.current.set(location.address, marker);
+      } catch (err) {
+        console.error("Error adding marker to map:", err);
       }
     });
     
     // Update current marker if needed
-    if (currentMarkerRef.current && currentIndex < locations.length) {
-      try {
-        const currentLocation = locations[currentIndex];
-        const icon = createCustomMarkerIcon(
-          leaflet,
-          currentLocation.verified === true,
-          currentLocation.verified === false,
-          true
-        );
-        
-        mapInstanceRef.current.removeLayer(currentMarkerRef.current);
-        
-        currentMarkerRef.current = leaflet.marker(currentLocation.coordinates, { icon })
-          .addTo(mapInstanceRef.current);
-        
-        // Build popup content with available information
-        let popupContent = `<b>${currentLocation.address}</b>`;
-        
-        if (currentLocation.propertyId) {
-          popupContent += `<br>ID: ${currentLocation.propertyId}`;
-        }
-        
-        if (currentLocation.tenant) {
-          popupContent += `<br>Tenant: ${currentLocation.tenant}`;
-        }
-          
-        // Bind popup but don't open it by default
-        currentMarkerRef.current.bindPopup(popupContent);
-      } catch (err) {
-        console.error("Error updating current marker on map:", err);
+    if (currentIndex < locations.length) {
+      const currentLocation = locations[currentIndex];
+      if (currentLocation.coordinates) {
+        updateCurrentMarker(currentLocation.coordinates);
       }
     }
   };
@@ -697,6 +718,13 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
               <div className={`geocoding-badge ${geocodingStatus}`}>
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                 <span>Geocoding address...</span>
+              </div>
+            )}
+            
+            {geocodingStatus === 'error' && (
+              <div className="geocoding-badge error">
+                <AlertCircle size={16} />
+                <span>Geocoding failed</span>
               </div>
             )}
           </div>
