@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -217,6 +218,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
     
     // Update geocoding status
     setGeocodingStatus('geocoding');
+    setIsGeocoding(true);
     
     // Mark location as geocoding
     const updatedLocations = [...locationsToUse];
@@ -285,6 +287,8 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         description: "Failed to find coordinates. Please place manually.",
         duration: 5000
       });
+    } finally {
+      setIsGeocoding(false);
     }
   };
   

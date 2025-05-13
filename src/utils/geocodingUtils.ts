@@ -1,65 +1,97 @@
 
 import { toast } from "@/hooks/use-toast";
+import { 
+  geocodeAddressWithNominatim, 
+  checkNominatimQuota 
+} from './geocodingProviders/nominatimProvider';
+import { 
+  geocodeAddressWithGeoapify, 
+  checkGeoapifyQuota 
+} from './geocodingProviders/geoapifyProvider';
+import { 
+  geocodeAddressWithMapTiler, 
+  checkMapTilerQuota 
+} from './geocodingProviders/maptilerProvider';
+import { 
+  geocodeAddressWithGeocodio, 
+  checkGeocodioQuota 
+} from './geocodingProviders/geocodioProvider';
+import { 
+  geocodeAddressWithRadar, 
+  checkRadarQuota 
+} from './geocodingProviders/radarProvider';
 
-// Rate limiting parameters for Nominatim
-const MIN_TIME_BETWEEN_REQUESTS = 1500; // 1.5 seconds between requests
-let lastRequestTime = 0;
+// Track which provider was last used to ensure we rotate
+let lastUsedProviderIndex = -1;
+
+// Provider rotation system
+const providers = [
+  {
+    name: 'Nominatim',
+    geocodeFunction: geocodeAddressWithNominatim,
+    checkQuota: checkNominatimQuota
+  },
+  {
+    name: 'Geoapify',
+    geocodeFunction: geocodeAddressWithGeoapify,
+    checkQuota: checkGeoapifyQuota
+  },
+  {
+    name: 'MapTiler',
+    geocodeFunction: geocodeAddressWithMapTiler,
+    checkQuota: checkMapTilerQuota
+  },
+  {
+    name: 'Geocodio',
+    geocodeFunction: geocodeAddressWithGeocodio,
+    checkQuota: checkGeocodioQuota
+  },
+  {
+    name: 'Radar',
+    geocodeFunction: geocodeAddressWithRadar,
+    checkQuota: checkRadarQuota
+  }
+];
 
 /**
- * Geocode an address using OpenStreetMap's Nominatim API
- * Respects usage policy: https://operations.osmfoundation.org/policies/nominatim/
+ * Alternate between geocoding providers and handle failover
  */
 export const geocodeAddress = async (address: string): Promise<[number, number] | null> => {
-  try {
-    // Respect Nominatim usage policy with rate limiting
-    const now = Date.now();
-    const timeToWait = Math.max(0, MIN_TIME_BETWEEN_REQUESTS - (now - lastRequestTime));
+  // Find next available provider
+  let startIndex = (lastUsedProviderIndex + 1) % providers.length;
+  let currentIndex = startIndex;
+  
+  do {
+    const provider = providers[currentIndex];
     
-    if (timeToWait > 0) {
-      await new Promise(resolve => setTimeout(resolve, timeToWait));
-    }
-    
-    // Update last request time
-    lastRequestTime = Date.now();
-    
-    // Prepare the address for URL
-    const encodedAddress = encodeURIComponent(address);
-    
-    // Make the geocoding request
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodedAddress}&format=json&addressdetails=1&limit=1`,
-      {
-        headers: {
-          'User-Agent': 'AddressVerificationTool/1.0',
+    // Check if this provider has quota available
+    if (provider.checkQuota()) {
+      try {
+        console.log(`Trying geocoding with ${provider.name}`);
+        const result = await provider.geocodeFunction(address);
+        
+        if (result) {
+          // Update last used provider index
+          lastUsedProviderIndex = currentIndex;
+          console.log(`Successfully geocoded with ${provider.name}`);
+          return result;
         }
-      }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`Geocoding failed with status: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    
-    if (data && data.length > 0) {
-      const lat = parseFloat(data[0].lat);
-      const lon = parseFloat(data[0].lon);
-      
-      if (!isNaN(lat) && !isNaN(lon)) {
-        return [lat, lon];
+      } catch (error) {
+        console.error(`Error with ${provider.name} provider:`, error);
       }
     }
     
-    // No results found
-    return null;
-  } catch (error) {
-    console.error("Geocoding error:", error);
-    return null;
-  }
+    // Move to next provider
+    currentIndex = (currentIndex + 1) % providers.length;
+  } while (currentIndex !== startIndex);
+  
+  // If we tried all providers and none worked, return null
+  console.error("All geocoding providers failed or exceeded quota");
+  return null;
 };
 
 /**
- * Batch geocode addresses with proper rate limiting
+ * Batch geocode addresses with proper provider rotation and rate limiting
  * Returns a map of address to coordinates
  */
 export const batchGeocodeAddresses = async (
@@ -146,6 +178,7 @@ const BUSINESS_TYPES: Record<string, string[]> = {
 /**
  * Enhanced geocoding with business type hints for better accuracy
  * Uses business name to determine likely business type for better geocoding
+ * Also rotates through multiple providers
  */
 export const enhancedGeocode = async (
   address: string, 
@@ -191,12 +224,40 @@ export const enhancedGeocode = async (
         }
       }
       
-      // Try again with business type hints if any matched
+      // Try each provider with business type hints
+      let coords = null;
+      
+      // Try with business type hints if any matched
       if (businessTypes.length > 0) {
         for (const type of businessTypes) {
-          const enhancedAddress = `${type} ${address}`;
-          const result = await geocodeAddress(enhancedAddress);
-          if (result) return result;
+          // Find next available provider
+          let startIndex = (lastUsedProviderIndex + 1) % providers.length;
+          let currentIndex = startIndex;
+          
+          do {
+            const provider = providers[currentIndex];
+            
+            // Check if this provider has quota available
+            if (provider.checkQuota()) {
+              try {
+                console.log(`Trying ${provider.name} with business hint "${type}"`);
+                const enhancedAddress = `${type} ${address}`;
+                coords = await provider.geocodeFunction(enhancedAddress);
+                
+                if (coords) {
+                  // Update last used provider
+                  lastUsedProviderIndex = currentIndex;
+                  console.log(`Successfully geocoded with ${provider.name} using hint "${type}"`);
+                  return coords;
+                }
+              } catch (error) {
+                console.error(`Error with ${provider.name} provider using hint "${type}":`, error);
+              }
+            }
+            
+            // Move to next provider
+            currentIndex = (currentIndex + 1) % providers.length;
+          } while (currentIndex !== startIndex);
         }
       }
       
