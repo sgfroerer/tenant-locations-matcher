@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -367,7 +366,7 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
         // Initialize map
         mapInstanceRef.current = leaflet.map(mapRef.current).setView(defaultUSCoordinates, 4);
         
-        // Add tile layers with better error handling and fallbacks
+        // Add Google Maps hybrid tile layer
         const addTileLayer = (url: string, options: any) => {
           try {
             return leaflet.tileLayer(url, options).addTo(mapInstanceRef.current);
@@ -377,22 +376,22 @@ const LocationVerifier: React.FC<LocationVerifierProps> = ({
           }
         };
         
-        // Try OpenStreetMap tiles first as they're more reliable
+        // Use Google Maps hybrid tiles
         let tileLayer = addTileLayer(
-          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'http://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}',
           {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-            maxZoom: 19
+            attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
           }
         );
         
-        // If OpenStreetMap fails, try CartoDB as fallback
+        // If Google Maps fails, fallback to OpenStreetMap
         if (!tileLayer) {
           tileLayer = addTileLayer(
-            'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
             {
               attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-              subdomains: 'abcd',
               maxZoom: 19
             }
           );
